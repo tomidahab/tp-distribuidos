@@ -15,7 +15,7 @@ logging.basicConfig(
     format="[CLIENT] %(asctime)s - %(levelname)s - %(message)s"
 )
 
-SERVER_HOST = "127.0.0.1"  # local test, cambiar a "gateway" en docker
+SERVER_HOST = "gateway"  # local test, cambiar a "gateway" en docker
 SERVER_PORT = 5000
 
 PATTERNS = {
