@@ -1,0 +1,2 @@
+Q4_STEP = 0
+QUERY_RESULT = 1
