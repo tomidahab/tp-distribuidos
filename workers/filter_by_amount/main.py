@@ -7,7 +7,6 @@ from workers.filter_by_hour.main import START_HOUR
 RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq')
 QUEUE_NAME = os.environ.get('QUEUE_NAME', 'filter_by_amount_queue')
 MIN_AMOUNT = float(os.environ.get('MIN_AMOUNT', 15.0))
-NEXT_QUEUE = os.environ.get('NEXT_QUEUE', 'filter_by_amount_queue')
 
 def filter_message_by_amount(message: bytes, min_amount: float) -> bool:
     try:
@@ -20,10 +19,9 @@ def filter_message_by_amount(message: bytes, min_amount: float) -> bool:
 
 def on_message_callback(message: bytes):
     if filter_message_by_amount(message, MIN_AMOUNT):
-        print(f"[worker] Message passed hour filter: {message}")
-        # Forward or process further if needed
+        print(f"[worker] Message passed amount filter: {message}")
     else:
-        print(f"[worker] Message filtered out by hour.")
+        print(f"[worker] Message filtered out by amount.")
 
 def main():
     print(f"[worker] Connecting to RabbitMQ at {RABBITMQ_HOST}, queue: {QUEUE_NAME}, filter by min amount: {MIN_AMOUNT}")
