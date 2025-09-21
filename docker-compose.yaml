@@ -20,3 +20,52 @@ services:
       - gateway
     volumes:
       - ./data/input:/data/input
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  filter_by_year_worker:
+    build:
+      context: ./workers/filter_by_year
+      dockerfile: Dockerfile
+    container_name: filter_by_year_worker
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - QUEUE_NAME=filter_by_year_queue
+      - FILTER_YEAR=2024,2025
+    depends_on:
+      - rabbitmq
+
+  filter_by_hour_worker:
+    build:
+      context: ./workers/filter_by_hour
+      dockerfile: Dockerfile
+    container_name: filter_by_hour_worker
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - QUEUE_NAME=filter_by_hour_queue
+      - START_HOUR=6
+      - END_HOUR=11
+    depends_on:
+      - rabbitmq
+
+filter_by_amount_worker:
+    build:
+      context: ./workers/filter_by_amount
+      dockerfile: Dockerfile
+    container_name: filter_by_amount_worker
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - QUEUE_NAME=filter_by_amount_queue
+      - MIN_AMOUNT=15.0
+    depends_on:
+      - rabbitmq
