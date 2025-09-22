@@ -8,6 +8,24 @@ CSV_TYPES = {
     4: "users"
 }
 
+def row_to_dict(row: str, csv_type: int) -> Dict:
+    """
+    Convierte un row (string) y el tipo de CSV en un diccionario con los campos correspondientes.
+    """
+    HEADERS = {
+        1: ["item_id", "item_name", "category", "price", "is_seasonal", "available_from", "available_to"],
+        2: ["transaction_id", "item_id", "quantity", "unit_price", "subtotal", "created_at"],
+        3: ["transaction_id", "store_id", "payment_method_id", "voucher_id", "user_id", "original_amount", "discount_applied", "final_amount", "created_at"],
+        4: ["user_id", "gender", "birthdate", "registered_at"]
+    }
+    fields = row.split(",")
+    header = HEADERS.get(csv_type)
+    if not header:
+        raise ValueError(f"csv_type {csv_type} no reconocido")
+    # Si hay menos fields que headers, completa con None
+    fields += [None] * (len(header) - len(fields))
+    return dict(zip(header, fields))
+
 def build_message(client_id: int, csv_type: int, is_last: int, rows: List[str]) -> Tuple[bytes, int]:
     """
     Arma un mensaje binario con el protocolo definido.
@@ -70,13 +88,16 @@ def get_rows(message: bytes) -> List[str]:
     return payload.decode("utf-8").split("\n") if payload else []
 
 
-""" Ejemplo de uso
+# Ejemplo de uso
+"""
 def main():
     rows = ["1,female,1970-04-22,2023-07-01 08:13:07", "2,female,1991-12-08,2023-07-01 09:53:48"]
     msg, length = build_message(1234, 4, 1, rows)
     print(msg)
     parsed = parse_message(msg)
     print(parsed)
+
+    print(row_to_dict(rows[0],4))
 
 main()
 """
