@@ -2,9 +2,13 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-COPY common /app/common
-COPY gateway/main.py /app/
+COPY gateway/ ./gateway
+COPY common/ ./common
+
+RUN pip install pika
 
 EXPOSE 5000
 
-CMD ["python", "main.py"]
+ENV PYTHONPATH="/app/common"
+ENV PYTHONPATH="/app:/app/common"
+CMD ["python", "gateway/main.py"]

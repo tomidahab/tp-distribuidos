@@ -3,9 +3,8 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-COPY main.py .
-
-COPY ../../common ./common
+COPY common /app/common
+COPY workers/filter_by_year/main.py /app/main.py
 
 RUN pip install pika
 
