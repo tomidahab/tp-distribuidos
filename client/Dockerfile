@@ -2,7 +2,8 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-COPY common /app/common
-COPY client/main.py /app/
+COPY client/ ./client
+COPY common/ ./common
 
-CMD ["python", "main.py", "/data/input"]
+COPY client/main.py /app/main.py
+CMD ["python", "/app/main.py", "/data/input"]

@@ -8,6 +8,8 @@ CSV_TYPES = {
     4: "users"
 }
 
+CSV_TYPES_REVERSE = {v: k for k, v in CSV_TYPES.items()}
+
 def row_to_dict(row: str, csv_type: int) -> Dict:
     """
     Convierte un row (string) y el tipo de CSV en un diccionario con los campos correspondientes.

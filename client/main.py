@@ -4,6 +4,7 @@ import sys
 import re
 import logging
 from socket import socket, AF_INET, SOCK_STREAM
+from time import sleep
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

@@ -1,6 +1,7 @@
 import os
 import sys
 import threading
+from time import sleep
 from common.protocol import parse_message, row_to_dict, build_message
 from common.middleware import MessageMiddlewareQueue, MessageMiddlewareDisconnectedError, MessageMiddlewareMessageError
 
@@ -24,6 +25,7 @@ def on_message_callback_transactions(message: bytes, hour_filter_queue, store_us
         is_last = parsed_message['is_last']
         new_rows = []
         for row in parsed_message['rows']:
+            print(f"[transactions] Procesando row: {row}")  # Mensaje agregado
             dic_fields_row = row_to_dict(row, type_of_message)
             msg_year = int(dic_fields_row['created_at'])
             if FILTER_YEARS in msg_year:
@@ -79,6 +81,7 @@ def consume_queue_t_items(queue, callback, item_categorizer_queue):
         print("[worker] Message error in middleware.", file=sys.stderr)
 
 def main():
+    sleep(60)  # Esperar a que RabbitMQ esté listo
     print(f"[worker] Connecting to RabbitMQ at {RABBITMQ_HOST}, queues: {QUEUE_T}, {QUEUE_T_ITEMS}, filter years: {FILTER_YEARS}")
     queue_t = MessageMiddlewareQueue(RABBITMQ_HOST, QUEUE_T)
     queue_t_items = MessageMiddlewareQueue(RABBITMQ_HOST, QUEUE_T_ITEMS)
