@@ -33,13 +33,16 @@ def handle_client(conn, addr):
 
             filepath = os.path.join(OUTPUT_DIR, filename)
 
-            remaining = filesize
+            received = 0
             with open(filepath, "wb") as f:
-                while remaining > 0:
-                    chunk_size = min(4096, remaining)
+                while received < filesize:
+                    chunk_header = recv_all(conn, 4)
+                    if not chunk_header:
+                        break
+                    chunk_size = struct.unpack("!I", chunk_header)[0]
                     chunk = recv_all(conn, chunk_size)
                     f.write(chunk)
-                    remaining -= chunk_size
+                    received += chunk_size
 
             logging.info(f"Archivo recibido: {filename} ({filesize} bytes)")
 

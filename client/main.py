@@ -31,7 +31,7 @@ def collect_files(folder):
     transaction_items = sorted([f for f in files if PATTERNS["transaction_items"].match(f)])
     users = sorted([f for f in files if PATTERNS["users"].match(f)])
     menu_items = [f for f in files if PATTERNS["menu_items"].match(f)]
-    ordered = transactions + transaction_items + users + menu_items
+    ordered = menu_items + transactions + transaction_items + users
     return [os.path.join(folder, f) for f in ordered]
 
 def send_file(skt, file_path):
@@ -43,9 +43,18 @@ def send_file(skt, file_path):
     send_all(skt, filename_bytes)
     send_all(skt, struct.pack("!Q", filesize))
 
+    CHUNK_TARGET = 4096
     with open(file_path, "rb") as f:
-        while chunk := f.read(4096):
-            send_all(skt, chunk)
+        buffer = b""
+        for line in f:
+            if len(buffer) + len(line) > CHUNK_TARGET and buffer:
+                send_all(skt, struct.pack("!I", len(buffer)))
+                send_all(skt, buffer)
+                buffer = b""
+            buffer += line
+        if buffer:
+            send_all(skt, struct.pack("!I", len(buffer)))
+            send_all(skt, buffer)
 
     logging.info(f"Archivo {filename} enviado ({filesize} bytes).")
 
