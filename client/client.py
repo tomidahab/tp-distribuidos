@@ -22,7 +22,7 @@ class Client:
         if self.current_file:
             self.current_file.close()
             self.current_file = None
-        logging.info('closing server socket [sigterm]')
+        logging.info('closing file descriptors and shutdown [sigterm]')
     
     def _send_file(self, file_path, last_file):
         filename = os.path.basename(file_path)
