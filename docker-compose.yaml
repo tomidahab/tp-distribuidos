@@ -44,6 +44,7 @@ services:
       - QUEUE_T_ITEMS=filter_by_year_transaction_items_queue
       - HOUR_FILTER_QUEUE=filter_by_hour_queue
       - ITEM_CATEGORIZER_QUEUE=filter_by_item_categorizer_queue
+      - STORE_USER_CATEGORIZER_QUEUE=store_user_categorizer_queue
       - FILTER_YEAR=2024,2025
     depends_on:
       - rabbitmq
@@ -72,5 +73,18 @@ services:
       - RABBITMQ_HOST=rabbitmq
       - QUEUE_NAME=filter_by_amount_queue
       - MIN_AMOUNT=15.0
+    depends_on:
+      - rabbitmq
+
+  categorizer_q2_worker:
+    build:
+      context: ./workers/categorizer_q2
+      dockerfile: Dockerfile
+    container_name: categorizer_q2_worker
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - ITEMS_QUEUE=categorizer_q2_items_queue
+      - RECEIVER_QUEUE=categorizer_q2_receiver_queue
+      - GATEWAY_QUEUE=categorizer_q2_gateway_queue
     depends_on:
       - rabbitmq
