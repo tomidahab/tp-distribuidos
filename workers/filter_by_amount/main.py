@@ -4,7 +4,7 @@ from common.protocol import protocol
 from common.middleware import MessageMiddlewareQueue, MessageMiddlewareDisconnectedError, MessageMiddlewareMessageError
 from workers.filter_by_hour.main import START_HOUR
 
-RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq')
+RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq_server')
 QUEUE_NAME = os.environ.get('QUEUE_NAME', 'filter_by_amount_queue')
 MIN_AMOUNT = float(os.environ.get('MIN_AMOUNT', 15.0))
 

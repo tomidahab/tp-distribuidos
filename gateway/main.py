@@ -42,8 +42,8 @@ def handle_client(conn, addr):
                 file_code = filename_to_type(filename)
                 while received < filesize:
                     if received != 0:
-                        # handle_and_forward_chunk(0, file_code, 0, chunk)
-                        print("todo! forward chunk")
+                        handle_and_forward_chunk(0, file_code, 0, chunk)
+                        #print("todo! forward chunk")
                     chunk_header = recv_all(conn, 4)
                     if not chunk_header:
                         break

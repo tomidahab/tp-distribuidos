@@ -2,11 +2,12 @@ import os
 import sys
 import threading
 from time import sleep
+from datetime import datetime
 from common.protocol import parse_message, row_to_dict, build_message
 from common.middleware import MessageMiddlewareQueue, MessageMiddlewareDisconnectedError, MessageMiddlewareMessageError
 
 # Configurable parameters (could be set via env vars or args)
-RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq')
+RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq_server')
 QUEUE_T_ITEMS = os.environ.get('QUEUE_T_ITEMS', 'filter_by_year_transaction_items_queue')
 QUEUE_T = os.environ.get('QUEUE_T', 'filter_by_year_transactions_queue')
 HOUR_FILTER_QUEUE = os.environ.get('HOUR_FILTER_QUEUE', 'filter_by_hour_queue')
@@ -27,9 +28,14 @@ def on_message_callback_transactions(message: bytes, hour_filter_queue, store_us
         for row in parsed_message['rows']:
             print(f"[transactions] Procesando row: {row}")  # Mensaje agregado
             dic_fields_row = row_to_dict(row, type_of_message)
-            msg_year = int(dic_fields_row['created_at'])
-            if FILTER_YEARS in msg_year:
-                new_rows.append(row)
+            # Parse year from created_at field
+            try:
+                created_at = dic_fields_row['created_at']
+                msg_year = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S").year
+                if msg_year in FILTER_YEARS:
+                    new_rows.append(row)
+            except Exception as e:
+                print(f"[transactions] Error parsing created_at: {created_at} ({e})", file=sys.stderr)
 
         new_message, _ = build_message(client_id, type_of_message, is_last, new_rows)
         # Naza: Acá va el recorte del mensaje para la Q1 y Q3
@@ -49,9 +55,14 @@ def on_message_callback_t_items(message: bytes, item_categorizer_queue):
         new_rows = []
         for row in parsed_message['rows']:
             dic_fields_row = row_to_dict(row, type_of_message)
-            msg_year = int(dic_fields_row['created_at'])
-            if FILTER_YEARS in msg_year:
-                new_rows.append(row)
+            # Parse year from created_at field
+            try:
+                created_at = dic_fields_row['created_at']
+                msg_year = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S").year
+                if msg_year in FILTER_YEARS:
+                    new_rows.append(row)
+            except Exception as e:
+                print(f"[t_items] Error parsing created_at: {created_at} ({e})", file=sys.stderr)
 
         new_message, _ = build_message(client_id, type_of_message, is_last, new_rows)
 

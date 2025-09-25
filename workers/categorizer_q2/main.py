@@ -4,7 +4,7 @@ from collections import defaultdict
 from common.protocol import protocol
 from common.middleware import MessageMiddlewareQueue, MessageMiddlewareDisconnectedError, MessageMiddlewareMessageError
 
-RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq')
+RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq_server')
 ITEMS_QUEUE = os.environ.get('ITEMS_QUEUE', 'categorizer_q2_items_queue')
 RECEIVER_QUEUE = os.environ.get('RECEIVER_QUEUE', 'categorizer_q2_receiver_queue')
 GATEWAY_QUEUE = os.environ.get('GATEWAY_QUEUE', 'categorizer_q2_gateway_queue')
