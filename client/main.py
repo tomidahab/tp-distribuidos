@@ -1,23 +1,18 @@
 import os
-import struct
 import sys
 import re
 import logging
-from socket import socket, AF_INET, SOCK_STREAM
+from client.client import Client
 from time import sleep
-
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from common.socket_utils import send_all
+from common.protocol_utils import *
 
 # Configuración del logger
 logging.basicConfig(
     level=logging.INFO,
     format="[CLIENT] %(asctime)s - %(levelname)s - %(message)s"
 )
-
-SERVER_HOST = "gateway"  # local test, cambiar a "gateway" en docker
-SERVER_PORT = 5000
 
 PATTERNS = {
     "transactions": re.compile(r"^transactions_\d{4}\d{2}\.csv$"),
@@ -35,44 +30,14 @@ def collect_files(folder):
     ordered = menu_items + transactions + transaction_items + users
     return [os.path.join(folder, f) for f in ordered]
 
-def send_file(skt, file_path):
-    filename = os.path.basename(file_path)
-    filesize = os.path.getsize(file_path)
-
-    filename_bytes = filename.encode("utf-8")
-    send_all(skt, struct.pack("!I", len(filename_bytes)))
-    send_all(skt, filename_bytes)
-    send_all(skt, struct.pack("!Q", filesize))
-
-    CHUNK_TARGET = 4096
-    with open(file_path, "rb") as f:
-        buffer = b""
-        for line in f:
-            if len(buffer) + len(line) > CHUNK_TARGET and buffer:
-                send_all(skt, struct.pack("!I", len(buffer)))
-                send_all(skt, buffer)
-                buffer = b""
-            buffer += line
-        if buffer:
-            send_all(skt, struct.pack("!I", len(buffer)))
-            send_all(skt, buffer)
-
-    logging.info(f"Archivo {filename} enviado ({filesize} bytes).")
-
 def main(folder):
+    client = Client()
     file_list = collect_files(folder)
     if not file_list:
         logging.warning("No se encontraron archivos para enviar.")
         return
-
-    with socket(AF_INET, SOCK_STREAM) as skt:
-        skt.connect((SERVER_HOST, SERVER_PORT))
-        logging.info(f"Conectado a {SERVER_HOST}:{SERVER_PORT}")
-
-        for file_path in file_list:
-            send_file(skt, file_path)
-
-    logging.info("Todos los archivos fueron enviados correctamente.")
+    
+    client.run(file_list)
 
 if __name__ == "__main__":
     folder = os.path.join("data", "input") if len(sys.argv) < 2 else sys.argv[1]
