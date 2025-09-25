@@ -41,8 +41,8 @@ def handle_client(conn, addr):
                 file_code = filename_to_type(filename)
                 while received < filesize:
                     if received != 0:
-                        # handle_and_forward_chunk(0, file_code, 0, chunk)
-                        print("todo! forward chunk")
+                        handle_and_forward_chunk(0, file_code, 0, chunk)
+                        # print("todo! forward chunk")
                     chunk = recv_h_bytes(conn)
                     f.write(chunk)
                     received += len(chunk)

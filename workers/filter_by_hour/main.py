@@ -3,7 +3,7 @@ import sys
 from common.protocol import protocol
 from common.middleware import MessageMiddlewareQueue, MessageMiddlewareDisconnectedError, MessageMiddlewareMessageError
 
-RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq')
+RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq_server')
 RECEIVER_QUEUE = os.environ.get('RECEIVER_QUEUE', 'filter_by_hour_queue')
 START_HOUR = int(os.environ.get('START_HOUR', 6))
 END_HOUR = int(os.environ.get('END_HOUR', 11))
