@@ -1,10 +1,14 @@
 import os
 import sys
 import logging
+import threading
 from socket import socket, AF_INET, SOCK_STREAM
+from time import sleep
 
+from common.protocol import parse_message
 from gateway_protocol import filename_to_type, handle_and_forward_chunk
 from common.protocol_utils import *
+from common.middleware import MessageMiddlewareQueue
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
@@ -19,6 +23,29 @@ logging.basicConfig(
 HOST = "0.0.0.0"
 PORT = 5000
 OUTPUT_DIR = os.path.join("data", "received")
+
+RESULT_Q1_QUEUE = os.environ.get('RESULT_QUEUE', 'query1_result_receiver_queue')
+RESULT_Q1_FILE = os.path.join(OUTPUT_DIR, 'result_q1.csv')
+
+def listen_and_dump_result_q1():
+    sleep(60)  # Esperar a que RabbitMQ esté listo
+    queue = MessageMiddlewareQueue(os.environ.get('RABBITMQ_HOST', 'rabbitmq_server'), RESULT_Q1_QUEUE)
+    def on_message_callback(message: bytes):
+        # Write message to result_q1.csv (append mode)
+        logging.info(f"[RESULT_Q1] Mensaje recibido en cola.")
+        parsed_message = parse_message(message)
+        rows = parsed_message['rows']
+        with open(RESULT_Q1_FILE, 'w+') as f:
+            for row in rows:
+                logging.info(f"[RESULT_Q1] Escribiendo row: {row}")
+                f.write(row)
+                f.write('\n')
+        logging.info(f"[RESULT_Q1] Mensaje guardado en {RESULT_Q1_FILE}")
+    try:
+        queue.start_consuming(on_message_callback)
+    except Exception as e:
+        logging.error(f"[RESULT_Q1] Error consumiendo mensajes: {e}")
+
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -46,7 +73,7 @@ def handle_client(conn, addr):
                     chunk = recv_h_bytes(conn)
                     f.write(chunk)
                     received += len(chunk)
-                #handle_and_forward_chunk(0, file_code, 1, chunk)
+                handle_and_forward_chunk(0, file_code, 1, chunk)
 
             logging.info(f"Archivo recibido: {filename} ({filesize} bytes)")
             if last_file:
@@ -56,6 +83,10 @@ def handle_client(conn, addr):
         logging.error(f"Error manejando cliente {addr}: {e}")
 
 def main():
+    # Start result queue listener thread
+    result_thread = threading.Thread(target=listen_and_dump_result_q1, daemon=True)
+    result_thread.start()
+
     with socket(AF_INET, SOCK_STREAM) as server:
         server.bind((HOST, PORT))
         server.listen(5)

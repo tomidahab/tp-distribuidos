@@ -25,8 +25,9 @@ def on_message_callback_transactions(message: bytes, hour_filter_queue, store_us
         client_id = parsed_message['client_id']
         is_last = parsed_message['is_last']
         new_rows = []
+        print(f"[transactions] Procesando mensaje con {len(parsed_message['rows'])} rows")  # Mens
         for row in parsed_message['rows']:
-            print(f"[transactions] Procesando row: {row}")  # Mensaje agregado
+            #print(f"[transactions] Procesando row: {row}")  # Mensaje agregado
             dic_fields_row = row_to_dict(row, type_of_message)
             # Parse year from created_at field
             try:
@@ -37,11 +38,17 @@ def on_message_callback_transactions(message: bytes, hour_filter_queue, store_us
             except Exception as e:
                 print(f"[transactions] Error parsing created_at: {created_at} ({e})", file=sys.stderr)
 
-        new_message, _ = build_message(client_id, type_of_message, is_last, new_rows)
-        # Naza: Acá va el recorte del mensaje para la Q1 y Q3
-        hour_filter_queue.send(new_message)
-        # Naza: Acá va el recorte del mensaje para la Q4
-        store_user_categorizer_queue.send(new_message)
+        
+        if new_rows!= []:
+            print(f"[transactions] Enviando mensaje con {len(new_rows)} rows")  # Mens
+
+            new_message, _ = build_message(client_id, type_of_message, is_last, new_rows)
+            # Naza: Acá va el recorte del mensaje para la Q1 y Q3
+            hour_filter_queue.send(new_message)
+            # Naza: Acá va el recorte del mensaje para la Q4
+            store_user_categorizer_queue.send(new_message)
+        else:
+            print(f"[transactions] Mensaje filtrado por año, 0 rows para enviar") 
     except Exception as e:
         print(f"[transactions] Error decoding message: {e}", file=sys.stderr)
 
