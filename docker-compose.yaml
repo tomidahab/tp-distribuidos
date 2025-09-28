@@ -98,33 +98,10 @@ services:
     environment:
       - RABBITMQ_HOST=rabbitmq_server
       - RECEIVER_QUEUE=store_semester_categorizer_queue
-      - GATEWAY_QUEUE=categorizer_q3_gateway_queue
+      - GATEWAY_QUEUE=query3_result_receiver_queue
     depends_on:
       - rabbitmq_server
+      - gateway
 
-  categorizer_q4_worker:
-    build:
-      context: ./workers/categorizer_q4
-      dockerfile: Dockerfile
-    container_name: categorizer_q4_worker
-    environment:
-      - RABBITMQ_HOST=rabbitmq_server
-      - RECEIVER_QUEUE=store_user_categorizer_queue
-      - BIRTHDAY_DICT_QUEUE=birthday_dictionary_queue
-    depends_on:
-      - rabbitmq_server
 
-  birthday_dictionary_worker:
-    build:
-      context: ./workers/birthday_dictionary
-      dockerfile: Dockerfile
-    container_name: birthday_dictionary_worker
-    environment:
-      - RABBITMQ_HOST=rabbitmq_server
-      - RECEIVER_QUEUE=birthday_dictionary_queue
-      - GATEWAY_REQUEST_QUEUE=birthday_dictionary_client_request_queue
-      - GATEWAY_CLIENT_DATA_QUEUE=gateway_client_data_queue
-      - QUERY4_ANSWER_QUEUE=query4_answer_queue
-    depends_on:
-      - rabbitmq_server
 
