@@ -80,7 +80,7 @@ class Gateway:
             logging.info(f"[{result_queue}] Mensaje recibido en cola: {message}")
             parsed_message = parse_message(message)
             rows = parsed_message['rows']
-            with open(result_file, 'w+') as f:
+            with open(result_file, 'a+') as f:
                 for row in rows:
                     if self.stop_by_sigterm:
                         return
@@ -110,7 +110,8 @@ class Gateway:
                 filename = recv_h_str(self.client_skt)
                 filesize = recv_long(self.client_skt)
                 last_file = recv_bool(self.client_skt)
-    
+                last_dataset = recv_bool(self.client_skt)
+
                 filepath = os.path.join(OUTPUT_DIR, filename)
     
                 received = 0
@@ -125,13 +126,10 @@ class Gateway:
                         if file_code == 1:
                             logging.info(f"[GATEWAY] Receiving chunk for file {filename}, total received: {received}/{filesize} bytes, len: {len(chunk)}")
                         if len(chunk) != 0:
-                            if received >= filesize:
-                                handle_and_forward_chunk(0, file_code, 1, chunk)
-                            else:
-                                handle_and_forward_chunk(0, file_code, 0, chunk)
+                            handle_and_forward_chunk(0, file_code, 1 if last_file else 0, chunk)
     
                 logging.info(f"Archivo recibido: {filename} ({filesize} bytes)")
-                if last_file:
+                if last_file and last_dataset:
                     break
     
         except Exception as e:

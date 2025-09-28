@@ -25,13 +25,14 @@ class Client:
             self.current_file = None
         logging.info('closing file descriptors and shutdown [sigterm]')
     
-    def _send_file(self, file_path, last_file):
+    def _send_file(self, file_path, last_file, last_dataset):
         filename = os.path.basename(file_path)
         filesize = os.path.getsize(file_path)
 
         send_h_str(self.skt, filename)
         send_long(self.skt, filesize)
         send_bool(self.skt, last_file)
+        send_bool(self.skt, last_dataset)
 
         self.current_file = open(file_path, "rb")
         buffer = b""
@@ -46,14 +47,19 @@ class Client:
         self.current_file.close()
         logging.info(f"Archivo {filename} enviado ({filesize} bytes).")
 
-    def run(self, file_list):
+    def run(self, data_sets):
         try:
             self.skt = socket(AF_INET, SOCK_STREAM)
             self.skt.connect((SERVER_HOST, SERVER_PORT))
             logging.info(f"Conectado a {SERVER_HOST}:{SERVER_PORT}")
-            for file in file_list[:-1]:
-                    self._send_file(file, False)
-            self._send_file(file_list[-1], True)
+            for data_set_files in data_sets[:-1]:
+                for file in data_set_files[:-1]:
+                    self._send_file(file, False, False)
+                self._send_file(data_set_files[-1], True, False)
+
+            for file in data_sets[-1][:-1]:
+                self._send_file(file, False, True)
+            self._send_file(data_sets[-1][-1], True, True)
 
             logging.info("Todos los archivos fueron enviados correctamente.")
 

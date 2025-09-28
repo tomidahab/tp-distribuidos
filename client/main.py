@@ -27,8 +27,17 @@ def collect_files(folder):
     transactions = sorted([f for f in files if PATTERNS["transactions"].match(f)])
     transaction_items = sorted([f for f in files if PATTERNS["transaction_items"].match(f)])
     users = sorted([f for f in files if PATTERNS["users"].match(f)])
-    ordered = menu_items + transactions + transaction_items + users
-    return [os.path.join(folder, f) for f in ordered]
+    # ordered = menu_items + transactions + transaction_items + users
+    # return [os.path.join(folder, f) for f in ordered]
+    datasets_list = []
+    def add_files(files):
+        if files:
+            datasets_list.append([os.path.join(folder, f) for f in files])
+    add_files(menu_items)
+    add_files(transactions)
+    add_files(transaction_items)
+    add_files(users)
+    return datasets_list
 
 def main(folder):
     client = Client()
