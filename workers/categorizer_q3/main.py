@@ -85,17 +85,16 @@ def send_results_to_gateway(semester_store_stats):
     try:
         queue = MessageMiddlewareQueue(RABBITMQ_HOST, GATEWAY_QUEUE)
         
+        # Convert to CSV format like Q1
+        csv_lines = []
         for (year, semester, store_id), total_payment in semester_store_stats.items():
-            result = {
-                'year': year,
-                'semester': semester,
-                'store_id': store_id,
-                'total_payment': total_payment
-            }
-
-            message = create_response_message(3, str(result))
-            queue.send(message)
-            print(f"[categorizer_q3] Sent result to gateway: {result}")
+            csv_line = f"{year},{semester},{store_id},{total_payment}"
+            csv_lines.append(csv_line)
+            
+        # Send as Q1-style message with rows and is_last=1
+        message, _ = build_message(0, 3, 1, csv_lines)  # client_id=0, csv_type=3, is_last=1 (final message)
+        queue.send(message)
+        print(f"[categorizer_q3] Sent {len(csv_lines)} results to gateway in batch")
             
         queue.close()
     except Exception as e:
