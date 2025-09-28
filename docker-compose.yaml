@@ -85,9 +85,10 @@ services:
       - RABBITMQ_HOST=rabbitmq_server
       - ITEMS_QUEUE=categorizer_q2_items_queue
       - RECEIVER_QUEUE=categorizer_q2_receiver_queue
-      - GATEWAY_QUEUE=categorizer_q2_gateway_queue
+      - GATEWAY_QUEUE=query2_result_receiver_queue
     depends_on:
       - rabbitmq_server
+      - gateway
 
   categorizer_q3_worker:
     build:
