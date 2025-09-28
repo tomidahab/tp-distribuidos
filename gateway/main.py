@@ -15,7 +15,7 @@ logging.basicConfig(
 
 def main():
     # Start result queue listener thread
-    gateway = gateway.Gateway()
+    gateway = Gateway()
     gateway.run()
 
 if __name__ == "__main__":
