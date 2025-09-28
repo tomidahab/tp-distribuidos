@@ -49,9 +49,10 @@ def on_message_callback(message: bytes, queue_filter_amount, queue_categorizer_s
         # Naza: Aca se trimmea el mensaje para la Q1
         if type_of_message == CSV_TYPES_REVERSE['transactions']:  # transactions CHECK!
             queue_filter_amount.send(new_message)
+            queue_categorizer_stores_semester.send(new_message)
         # Naza: Aca se trimmea el mensaje para la Q3
         if type_of_message == CSV_TYPES_REVERSE['transaction_items']:  # transactions CHECK!
-            queue_categorizer_stores_semester.send(new_message)
+            print(f"[worker] Received a transaction_items message, that should never happen!", flush=True)
     else:
         print(f"[worker] Whole Message filtered out by hour.")
 

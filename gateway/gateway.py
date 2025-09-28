@@ -48,7 +48,7 @@ class Gateway:
         except Exception as e:
             logging.error(f"Error leyendo archivo de respuesta {source_file}: {e}")
 
-    def listen_queue_result_query2(self, result_queue, result_file):
+    def listen_queue_result_dictionary(self, result_queue, result_file, query_type):
         sleep(config.MIDDLEWARE_UP_TIME)  # Esperar a que RabbitMQ esté listo
         queue = MessageMiddlewareQueue(os.environ.get('RABBITMQ_HOST', 'rabbitmq_server'), result_queue)
 
@@ -63,7 +63,7 @@ class Gateway:
                 f.write('\n')
             logging.info(f"[{result_queue}] Mensaje guardado en {result_file}")
             logging.info(f"[{result_queue}] Enviando respuesta de tamaño {size} al cliente con contenido: {dictionary_str}")
-            send_response(self.client_skt, CSV_TYPES_REVERSE["transaction_items"], dictionary_str)
+            send_response(self.client_skt, query_type + 2, dictionary_str) # Q2=4, Q3=5
             logging.info(f"[{result_queue}] Respuesta enviada.")
 
         try:
@@ -141,7 +141,7 @@ class Gateway:
         # Start result queue listener thread
         q1_result_thread = threading.Thread(target=self.listen_queue_result, args=(RESULT_Q1_QUEUE, RESULT_Q1_FILE), daemon=True)
         q1_result_thread.start()
-        q2_result_thread = threading.Thread(target=self.listen_queue_result_query2, args=(RESULT_Q2_QUEUE, RESULT_Q2_FILE), daemon=True)
+        q2_result_thread = threading.Thread(target=self.listen_queue_result_dictionary, args=(RESULT_Q2_QUEUE, RESULT_Q2_FILE, 2), daemon=True)
         q2_result_thread.start()
         q3_result_thread = threading.Thread(target=self.listen_queue_result, args=(RESULT_Q3_QUEUE, RESULT_Q3_FILE), daemon=True)
         q3_result_thread.start()
