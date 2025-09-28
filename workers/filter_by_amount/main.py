@@ -3,6 +3,7 @@ import sys
 from time import sleep
 from common.protocol import parse_message, row_to_dict, build_message
 from common.middleware import MessageMiddlewareQueue, MessageMiddlewareDisconnectedError, MessageMiddlewareMessageError
+import common.config as config
 
 RABBITMQ_HOST = os.environ.get('rabbitmq_server_HOST', 'rabbitmq_server')
 QUEUE_NAME = os.environ.get('QUEUE_NAME', 'filter_by_amount_queue')
@@ -48,7 +49,7 @@ def make_on_message_callback(receiver_queue, queue_result):
 
 
 def main():
-    sleep(60)  # Esperar a que RabbitMQ esté listo
+    sleep(config.MIDDLEWARE_UP_TIME)  # Esperar a que RabbitMQ esté listo
     print(f"[worker] Connecting to RabbitMQ at {RABBITMQ_HOST}, queue: {QUEUE_NAME}, filter by min amount: {MIN_AMOUNT}")
     queue = MessageMiddlewareQueue(RABBITMQ_HOST, QUEUE_NAME)
     queue_result = MessageMiddlewareQueue(RABBITMQ_HOST, RESULT_QUEUE)

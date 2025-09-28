@@ -2,6 +2,7 @@ from socket import socket, AF_INET, SOCK_STREAM
 import os
 import signal
 from common.protocol_utils import *
+from client.client_protocol import *
 import logging
 
 SERVER_HOST = "gateway"  # local test, cambiar a "gateway" en docker
@@ -55,6 +56,9 @@ class Client:
             self._send_file(file_list[-1], True)
 
             logging.info("Todos los archivos fueron enviados correctamente.")
+
+            type, response = recv_response(self.skt)
+            logging.info(f"Respuesta del gateway (type={type}):\n{response}")
         except OSError as e:
             logging.error(f"Error: {e}")
         finally:

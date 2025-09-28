@@ -78,8 +78,8 @@ services:
 
   categorizer_q2_worker:
     build:
-      context: ./workers/categorizer_q2
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: workers/categorizer_q2/Dockerfile
     container_name: categorizer_q2_worker
     environment:
       - RABBITMQ_HOST=rabbitmq_server
@@ -91,8 +91,8 @@ services:
 
   categorizer_q3_worker:
     build:
-      context: ./workers/categorizer_q3
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: workers/categorizer_q3/Dockerfile
     container_name: categorizer_q3_worker
     environment:
       - RABBITMQ_HOST=rabbitmq_server
