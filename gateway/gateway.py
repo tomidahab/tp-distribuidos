@@ -94,15 +94,18 @@ class Gateway:
                 with open(filepath, "wb") as f:
                     file_code = filename_to_type(filename)
                     while received < filesize:
-                        if received != 0:
-                            handle_and_forward_chunk(0, file_code, 0, chunk)
-                            # print("todo! forward chunk")
                         chunk = recv_h_bytes(self.client_skt)
                         if self.stop_by_sigterm:
                             return
                         f.write(chunk)
-                        received += len(chunk)
-                    handle_and_forward_chunk(0, file_code, 1, chunk)
+                        received += len(chunk)  
+                        if file_code == 1:
+                            logging.info(f"[GATEWAY] Receiving chunk for file {filename}, total received: {received}/{filesize} bytes, len: {len(chunk)}")
+                        if len(chunk) != 0:
+                            if received >= filesize:
+                                handle_and_forward_chunk(0, file_code, 1, chunk)
+                            else:
+                                handle_and_forward_chunk(0, file_code, 0, chunk)
     
                 logging.info(f"Archivo recibido: {filename} ({filesize} bytes)")
                 if last_file:

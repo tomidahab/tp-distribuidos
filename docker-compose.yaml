@@ -39,11 +39,11 @@ services:
       dockerfile: workers/filter_by_year/Dockerfile
     container_name: filter_by_year_worker
     environment:
-      - rabbitmq_server_HOST=rabbitmq_server
+      - RABBITMQ_HOST=rabbitmq_server
       - QUEUE_T=filter_by_year_transactions_queue
       - QUEUE_T_ITEMS=filter_by_year_transaction_items_queue
       - HOUR_FILTER_QUEUE=filter_by_hour_queue
-      - ITEM_CATEGORIZER_QUEUE=filter_by_item_categorizer_queue
+      - ITEM_CATEGORIZER_QUEUE=categorizer_q2_receiver_queue
       - STORE_USER_CATEGORIZER_QUEUE=store_user_categorizer_queue
       - FILTER_YEAR=2024,2025
     depends_on:
@@ -55,7 +55,7 @@ services:
       dockerfile: workers/filter_by_hour/Dockerfile
     container_name: filter_by_hour_worker
     environment:
-      - rabbitmq_server_HOST=rabbitmq_server
+      - RABBITMQ_HOST=rabbitmq_server
       - RECEIVER_QUEUE=filter_by_hour_queue
       - START_HOUR=6
       - END_HOUR=11
@@ -70,7 +70,7 @@ services:
       dockerfile: workers/filter_by_amount/Dockerfile
     container_name: filter_by_amount_worker
     environment:
-      - rabbitmq_server_HOST=rabbitmq_server
+      - RABBITMQ_HOST=rabbitmq_server
       - QUEUE_NAME=filter_by_amount_queue
       - MIN_AMOUNT=15.0
     depends_on:

@@ -1,1 +1,1 @@
-MIDDLEWARE_UP_TIME = 9 # Seconds to wait for RabbitMQ to be ready
+MIDDLEWARE_UP_TIME = 60 # Seconds to wait for RabbitMQ to be ready

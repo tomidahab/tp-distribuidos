@@ -9,11 +9,15 @@ from common.middleware import MessageMiddlewareQueue
 RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq_server')
 QUEUE_FILTER_BY_YEAR_T = 'filter_by_year_transactions_queue'
 QUEUE_FILTER_BY_YEAR_T_ITEMS = 'filter_by_year_transaction_items_queue'
+CATEGORIZER_QUERY2_ITEMS_QUEUE = 'categorizer_q2_items_queue'
+CATEGORIZER_QUERY2_TRANSACTIONS_QUEUE = 'categorizer_q2_receiver_queue'
 
 
 # Instancias de las colas (inicialización perezosa)
 filter_by_year_t_queue = None
 filter_by_year_t_items_queue = None
+categorizer_query2_items_queue = None
+categorizer_query2_transactions_queue = None
 
 
 def recv_lines_batch(skt: socket):
@@ -34,13 +38,15 @@ def handle_and_forward_chunk(client_id: int, csv_type: int, is_last: int, chunk:
     """
     Construye el mensaje usando el protocolo y lo envía a la cola correspondiente por RabbitMQ.
     """
-    global filter_by_year_t_queue, filter_by_year_t_items_queue
+    global filter_by_year_t_queue, filter_by_year_t_items_queue, categorizer_query2_items_queue, categorizer_query2_transactions_queue
     rows = chunk.decode("utf-8").splitlines()
     message, _ = build_message(client_id, csv_type, is_last, rows)
     MAX_RETRIES = 10
     RETRY_DELAY = 3
     try:
-        if csv_type == 2:  # transaction_items
+        if csv_type != 2:
+            print(f"[gateway_protocol] Forwarding message of type {csv_type} with {len(rows)} rows to the appropriate queue")
+        if csv_type == CSV_TYPES_REVERSE["transaction_items"]:  # transaction_items
             for attempt in range(MAX_RETRIES):
                 try:
                     if filter_by_year_t_items_queue is None:
@@ -54,7 +60,8 @@ def handle_and_forward_chunk(client_id: int, csv_type: int, is_last: int, chunk:
             else:
                 print(f"[gateway_protocol] Failed to connect to transaction_items queue after {MAX_RETRIES} retries", file=sys.stderr)
                 return -1
-        elif csv_type == 3:  # transactions
+        elif csv_type == CSV_TYPES_REVERSE["transactions"]:  # transactions
+            # Enviar a filter_by_year_t_queue
             for attempt in range(MAX_RETRIES):
                 try:
                     if filter_by_year_t_queue is None:
@@ -67,6 +74,22 @@ def handle_and_forward_chunk(client_id: int, csv_type: int, is_last: int, chunk:
                     time.sleep(RETRY_DELAY)
             else:
                 print(f"[gateway_protocol] Failed to connect to transactions queue after {MAX_RETRIES} retries", file=sys.stderr)
+                return -1
+            
+        elif csv_type == CSV_TYPES_REVERSE["menu_items"]:  # menu_items
+            print(f"[gateway_protocol] Forwarding menu_items to categorizer_q2_items_queue")
+            for attempt in range(MAX_RETRIES):
+                try:
+                    if categorizer_query2_items_queue is None:
+                        categorizer_query2_items_queue = MessageMiddlewareQueue(RABBITMQ_HOST, CATEGORIZER_QUERY2_ITEMS_QUEUE)
+                    categorizer_query2_items_queue.send(message)
+                    break
+                except Exception as e:
+                    print(f"[gateway_protocol] Retry {attempt+1}/{MAX_RETRIES} for menu_items queue: {e}", file=sys.stderr)
+                    categorizer_query2_items_queue = None
+                    time.sleep(RETRY_DELAY)
+            else:
+                print(f"[gateway_protocol] Failed to connect to menu_items queue after {MAX_RETRIES} retries", file=sys.stderr)
                 return -1
         # Otros tipos no se envían por ahora
     except Exception as e:
