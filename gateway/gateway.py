@@ -95,6 +95,8 @@ class Gateway:
                     file_code = filename_to_type(filename)
                     while received < filesize:
                         chunk = recv_h_bytes(self.client_skt)
+                        if self.stop_by_sigterm:
+                            return
                         f.write(chunk)
                         received += len(chunk)  
                         if file_code == 1:
