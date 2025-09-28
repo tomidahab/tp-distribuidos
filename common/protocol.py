@@ -28,6 +28,27 @@ def row_to_dict(row: str, csv_type: int) -> Dict:
     fields += [None] * (len(header) - len(fields))
     return dict(zip(header, fields))
 
+def create_response_message(response_query: int, response: str) -> bytes:
+    """
+    Crea un mensaje de respuesta con el protocolo definido.
+    Header: 1 byte response_type, 4 bytes response_length
+    Payload: response en texto plano UTF-8
+    """
+    payload_bytes = response.encode("utf-8")
+    payload_len = len(payload_bytes)
+    header = struct.pack(">BI", response_query, payload_len)
+    message = header + payload_bytes
+    return message
+
+def unpack_response_message(message: bytes) -> Tuple[int, str]:
+    """
+    Desempaqueta un mensaje de respuesta y devuelve el response_type y el response en texto plano.
+    """
+    response_type, payload_len = struct.unpack(">BI", message[:5])
+    payload = message[5:5+payload_len]
+    response = payload.decode("utf-8")
+    return response_type, response
+
 def build_message(client_id: int, csv_type: int, is_last: int, rows: List[str]) -> Tuple[bytes, int]:
     """
     Arma un mensaje binario con el protocolo definido.
