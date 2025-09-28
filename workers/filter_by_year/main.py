@@ -7,15 +7,23 @@ from common.protocol import parse_message, row_to_dict, build_message
 from common.middleware import MessageMiddlewareQueue, MessageMiddlewareDisconnectedError, MessageMiddlewareMessageError
 
 # Configurable parameters (could be set via env vars or args)
-RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq_server')
+RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', os.environ.get('rabbitmq_server_HOST', 'rabbitmq_server'))
 QUEUE_T_ITEMS = os.environ.get('QUEUE_T_ITEMS', 'filter_by_year_transaction_items_queue')
 QUEUE_T = os.environ.get('QUEUE_T', 'filter_by_year_transactions_queue')
 HOUR_FILTER_QUEUE = os.environ.get('HOUR_FILTER_QUEUE', 'filter_by_hour_queue')
-ITEM_CATEGORIZER_QUEUE = os.environ.get('ITEM_CATEGORIZER_QUEUE', 'filter_by_item_categorizer_queue')
+ITEM_CATEGORIZER_QUEUE = os.environ.get('ITEM_CATEGORIZER_QUEUE', 'categorizer_q2_receiver_queue')
 STORE_USER_CATEGORIZER_QUEUE = os.environ.get('STORE_USER_CATEGORIZER_QUEUE', 'store_user_categorizer_queue')
 FILTER_YEARS = [
     int(y.strip()) for y in os.environ.get('FILTER_YEAR', '2024,2025').split(',')
 ]
+
+print(f"[filter_by_year] Starting with FILTER_YEARS: {FILTER_YEARS}")
+# print(f"  RABBITMQ_HOST: {RABBITMQ_HOST}")
+# print(f"  QUEUE_T_ITEMS: {QUEUE_T_ITEMS}")
+# print(f"  QUEUE_T: {QUEUE_T}")
+# print(f"  HOUR_FILTER_QUEUE: {HOUR_FILTER_QUEUE}")
+# print(f"  ITEM_CATEGORIZER_QUEUE: {ITEM_CATEGORIZER_QUEUE}")
+# print(f"  STORE_USER_CATEGORIZER_QUEUE: {STORE_USER_CATEGORIZER_QUEUE}")
 
 def on_message_callback_transactions(message: bytes, hour_filter_queue, store_user_categorizer_queue):
     try:
@@ -25,9 +33,9 @@ def on_message_callback_transactions(message: bytes, hour_filter_queue, store_us
         client_id = parsed_message['client_id']
         is_last = parsed_message['is_last']
         new_rows = []
-        print(f"[transactions] Procesando mensaje con {len(parsed_message['rows'])} rows")  # Mens
+        # print(f"[transactions] Procesando mensaje con {len(parsed_message['rows'])} rows")  # Keep only for important batches
         for row in parsed_message['rows']:
-            #print(f"[transactions] Procesando row: {row}")  # Mensaje agregado
+            # print(f"[transactions] Procesando row: {row}")  # Too verbose for large files
             dic_fields_row = row_to_dict(row, type_of_message)
             # Parse year from created_at field
             try:
@@ -40,15 +48,15 @@ def on_message_callback_transactions(message: bytes, hour_filter_queue, store_us
 
         
         if new_rows!= []:
-            print(f"[transactions] Enviando mensaje con {len(new_rows)} rows")  # Mens
+            # print(f"[transactions] Enviando mensaje con {len(new_rows)} rows")  # Less verbose
 
             new_message, _ = build_message(client_id, type_of_message, is_last, new_rows)
             # Naza: Acá va el recorte del mensaje para la Q1 y Q3
             hour_filter_queue.send(new_message)
             # Naza: Acá va el recorte del mensaje para la Q4
             store_user_categorizer_queue.send(new_message)
-        else:
-            print(f"[transactions] Mensaje filtrado por año, 0 rows para enviar") 
+        # else:
+        #     print(f"[transactions] Mensaje filtrado por año, 0 rows para enviar")  # Too verbose 
     except Exception as e:
         print(f"[transactions] Error decoding message: {e}", file=sys.stderr)
 
@@ -79,43 +87,71 @@ def on_message_callback_t_items(message: bytes, item_categorizer_queue):
         print(f"[t_items] Error decoding message: {e}", file=sys.stderr)
 
 def consume_queue_transactions(queue, callback, hour_filter_queue, store_user_categorizer_queue):
+    print("[filter_by_year] Starting to consume transactions queue...")
     def wrapper(message):
         callback(message, hour_filter_queue, store_user_categorizer_queue)
     try:
         queue.start_consuming(wrapper)
     except MessageMiddlewareDisconnectedError:
-        print("[worker] Disconnected from middleware.", file=sys.stderr)
+        print("[filter_by_year] Disconnected from middleware (transactions).", file=sys.stderr)
     except MessageMiddlewareMessageError:
-        print("[worker] Message error in middleware.", file=sys.stderr)
+        print("[filter_by_year] Message error in middleware (transactions).", file=sys.stderr)
+    except Exception as e:
+        print(f"[filter_by_year] Unexpected error in transactions consumer: {e}", file=sys.stderr)
 
 def consume_queue_t_items(queue, callback, item_categorizer_queue):
+    print("[filter_by_year] Starting to consume transaction_items queue...")
     def wrapper(message):
         callback(message, item_categorizer_queue)
     try:
         queue.start_consuming(wrapper)
     except MessageMiddlewareDisconnectedError:
-        print("[worker] Disconnected from middleware.", file=sys.stderr)
+        print("[filter_by_year] Disconnected from middleware (transaction_items).", file=sys.stderr)
     except MessageMiddlewareMessageError:
-        print("[worker] Message error in middleware.", file=sys.stderr)
+        print("[filter_by_year] Message error in middleware (transaction_items).", file=sys.stderr)
+    except Exception as e:
+        print(f"[filter_by_year] Unexpected error in transaction_items consumer: {e}", file=sys.stderr)
 
 def main():
+    print("[filter_by_year] Worker starting...")
     sleep(60)  # Esperar a que RabbitMQ esté listo
-    print(f"[worker] Connecting to RabbitMQ at {RABBITMQ_HOST}, queues: {QUEUE_T}, {QUEUE_T_ITEMS}, filter years: {FILTER_YEARS}")
-    queue_t = MessageMiddlewareQueue(RABBITMQ_HOST, QUEUE_T)
-    queue_t_items = MessageMiddlewareQueue(RABBITMQ_HOST, QUEUE_T_ITEMS)
-    hour_filter_queue = MessageMiddlewareQueue(RABBITMQ_HOST, HOUR_FILTER_QUEUE)
-    store_user_categorizer_queue = MessageMiddlewareQueue(RABBITMQ_HOST, STORE_USER_CATEGORIZER_QUEUE)
-    item_categorizer_queue = MessageMiddlewareQueue(RABBITMQ_HOST, ITEM_CATEGORIZER_QUEUE)
+    print(f"[filter_by_year] Connecting to RabbitMQ at {RABBITMQ_HOST}, queues: {QUEUE_T}, {QUEUE_T_ITEMS}, filter years: {FILTER_YEARS}")
+    
+    try:
+        queue_t = MessageMiddlewareQueue(RABBITMQ_HOST, QUEUE_T)
+        print(f"[filter_by_year] Connected to transactions queue: {QUEUE_T}")
+        
+        queue_t_items = MessageMiddlewareQueue(RABBITMQ_HOST, QUEUE_T_ITEMS)
+        print(f"[filter_by_year] Connected to transaction_items queue: {QUEUE_T_ITEMS}")
+        
+        hour_filter_queue = MessageMiddlewareQueue(RABBITMQ_HOST, HOUR_FILTER_QUEUE)
+        print(f"[filter_by_year] Connected to hour filter queue: {HOUR_FILTER_QUEUE}")
+        
+        store_user_categorizer_queue = MessageMiddlewareQueue(RABBITMQ_HOST, STORE_USER_CATEGORIZER_QUEUE)
+        print(f"[filter_by_year] Connected to store user categorizer queue: {STORE_USER_CATEGORIZER_QUEUE}")
+        
+        item_categorizer_queue = MessageMiddlewareQueue(RABBITMQ_HOST, ITEM_CATEGORIZER_QUEUE)
+        print(f"[filter_by_year] Connected to item categorizer queue: {ITEM_CATEGORIZER_QUEUE}")
+        
+    except Exception as e:
+        print(f"[filter_by_year] Error connecting to RabbitMQ: {e}", file=sys.stderr)
+        return
 
+    print("[filter_by_year] Starting consumer threads...")
     t1 = threading.Thread(target=consume_queue_transactions, args=(queue_t, on_message_callback_transactions, hour_filter_queue, store_user_categorizer_queue))
     t2 = threading.Thread(target=consume_queue_t_items, args=(queue_t_items, on_message_callback_t_items, item_categorizer_queue))
+    
+    print("[filter_by_year] Starting transactions thread...")
     t1.start()
+    print("[filter_by_year] Starting transaction_items thread...")
     t2.start()
+    
+    print("[filter_by_year] All threads started, waiting for messages...")
     try:
         t1.join()
         t2.join()
     except KeyboardInterrupt:
-        print("[worker] Stopping...")
+        print("[filter_by_year] Stopping...")
         queue_t.stop_consuming()
         queue_t_items.stop_consuming()
         queue_t.close()

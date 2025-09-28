@@ -2,7 +2,7 @@ from datetime import datetime
 import os
 from time import sleep
 import sys
-from common.protocol import parse_message, row_to_dict, build_message
+from common.protocol import parse_message, row_to_dict, build_message, CSV_TYPES_REVERSE
 from common.middleware import MessageMiddlewareQueue, MessageMiddlewareDisconnectedError, MessageMiddlewareMessageError
 
 RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq_server')
@@ -46,9 +46,11 @@ def on_message_callback(message: bytes, queue_filter_amount, queue_categorizer_s
 
         new_message, _ = build_message(client_id, type_of_message, is_last, filtered_rows)
         # Naza: Aca se trimmea el mensaje para la Q1
-        queue_filter_amount.send(new_message)
+        if type_of_message == CSV_TYPES_REVERSE['transactions']:  # transactions CHECK!
+            queue_filter_amount.send(new_message)
         # Naza: Aca se trimmea el mensaje para la Q3
-        queue_categorizer_stores_semester.send(new_message)
+        if type_of_message == CSV_TYPES_REVERSE['transaction_items']:  # transactions CHECK!
+            queue_categorizer_stores_semester.send(new_message)
     else:
         print(f"[worker] Whole Message filtered out by hour.")
 

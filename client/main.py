@@ -23,10 +23,10 @@ PATTERNS = {
 
 def collect_files(folder):
     files = os.listdir(folder)
+    menu_items = [f for f in files if PATTERNS["menu_items"].match(f)]
     transactions = sorted([f for f in files if PATTERNS["transactions"].match(f)])
     transaction_items = sorted([f for f in files if PATTERNS["transaction_items"].match(f)])
     users = sorted([f for f in files if PATTERNS["users"].match(f)])
-    menu_items = [f for f in files if PATTERNS["menu_items"].match(f)]
     ordered = menu_items + transactions + transaction_items + users
     return [os.path.join(folder, f) for f in ordered]
 
