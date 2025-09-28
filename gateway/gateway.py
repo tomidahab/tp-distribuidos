@@ -6,7 +6,7 @@ import threading
 from time import sleep
 
 from common.middleware import MessageMiddlewareQueue
-from common.protocol import parse_message
+from common.protocol import parse_message, unpack_response_message
 import common.config as config
 from gateway_protocol import *
 
@@ -47,6 +47,29 @@ class Gateway:
                 send_response(self.client_skt, response_type, response)
         except Exception as e:
             logging.error(f"Error leyendo archivo de respuesta {source_file}: {e}")
+
+    def listen_queue_result_query2(self, result_queue, result_file):
+        sleep(config.MIDDLEWARE_UP_TIME)  # Esperar a que RabbitMQ esté listo
+        queue = MessageMiddlewareQueue(os.environ.get('RABBITMQ_HOST', 'rabbitmq_server'), result_queue)
+
+        def on_message_callback(message: bytes):
+            # Write message to result_q1.csv (append mode)
+            logging.info(f"[{result_queue}] Mensaje recibido en cola: {message}")
+            size, dictionary_str = unpack_response_message(message)
+            with open(result_file, 'w+') as f:
+                if self.stop_by_sigterm:
+                    return
+                f.write(dictionary_str)
+                f.write('\n')
+            logging.info(f"[{result_queue}] Mensaje guardado en {result_file}")
+            logging.info(f"[{result_queue}] Enviando respuesta de tamaño {size} al cliente con contenido: {dictionary_str}")
+            send_response(self.client_skt, CSV_TYPES_REVERSE["transaction_items"], dictionary_str)
+            logging.info(f"[{result_queue}] Respuesta enviada.")
+
+        try:
+            queue.start_consuming(on_message_callback)
+        except Exception as e:
+            logging.error(f"[{result_queue}] Error consumiendo mensajes: {e}")
 
     def listen_queue_result(self, result_queue, result_file):
         sleep(config.MIDDLEWARE_UP_TIME)  # Esperar a que RabbitMQ esté listo
@@ -118,7 +141,7 @@ class Gateway:
         # Start result queue listener thread
         q1_result_thread = threading.Thread(target=self.listen_queue_result, args=(RESULT_Q1_QUEUE, RESULT_Q1_FILE), daemon=True)
         q1_result_thread.start()
-        q2_result_thread = threading.Thread(target=self.listen_queue_result, args=(RESULT_Q2_QUEUE, RESULT_Q2_FILE), daemon=True)
+        q2_result_thread = threading.Thread(target=self.listen_queue_result_query2, args=(RESULT_Q2_QUEUE, RESULT_Q2_FILE), daemon=True)
         q2_result_thread.start()
         q3_result_thread = threading.Thread(target=self.listen_queue_result, args=(RESULT_Q3_QUEUE, RESULT_Q3_FILE), daemon=True)
         q3_result_thread.start()
