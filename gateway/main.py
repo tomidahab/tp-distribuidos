@@ -1,14 +1,7 @@
 import os
 import sys
 import logging
-import threading
-from socket import socket, AF_INET, SOCK_STREAM
-from time import sleep
-
-from common.protocol import parse_message
-from gateway_protocol import filename_to_type, handle_and_forward_chunk
-from common.protocol_utils import *
-from common.middleware import MessageMiddlewareQueue
+from gateway import *
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
@@ -20,87 +13,10 @@ logging.basicConfig(
     format="[GATEWAY] %(asctime)s - %(levelname)s - %(message)s"
 )
 
-HOST = "0.0.0.0"
-PORT = 5000
-OUTPUT_DIR = os.path.join("data", "received")
-
-RESULT_Q1_QUEUE = os.environ.get('RESULT_QUEUE', 'query1_result_receiver_queue')
-RESULT_Q1_FILE = os.path.join(OUTPUT_DIR, 'result_q1.csv')
-
-def listen_and_dump_result_q1():
-    sleep(60)  # Esperar a que RabbitMQ esté listo
-    queue = MessageMiddlewareQueue(os.environ.get('RABBITMQ_HOST', 'rabbitmq_server'), RESULT_Q1_QUEUE)
-    def on_message_callback(message: bytes):
-        # Write message to result_q1.csv (append mode)
-        logging.info(f"[RESULT_Q1] Mensaje recibido en cola.")
-        parsed_message = parse_message(message)
-        rows = parsed_message['rows']
-        with open(RESULT_Q1_FILE, 'w+') as f:
-            for row in rows:
-                #logging.info(f"[RESULT_Q1] Escribiendo row: {row}")
-                f.write(row)
-                f.write('\n')
-        logging.info(f"[RESULT_Q1] Mensaje guardado en {RESULT_Q1_FILE}")
-    try:
-        queue.start_consuming(on_message_callback)
-    except Exception as e:
-        logging.error(f"[RESULT_Q1] Error consumiendo mensajes: {e}")
-
-
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-def handle_client(conn, addr):
-    logging.info(f"Conexión recibida de {addr}")
-    try:
-        while True:
-            # NOTE: `recv` is unreliable, and `recv_all` guarantees that we will either receive all the bytes
-            # or raise a ConnectionError. Therefore, we should not treat it as a function that can return None.
-            # To know when to stop receiving file data, we need explicit flags.
-            
-            filename = recv_h_str(conn)
-            filesize = recv_long(conn)
-            last_file = recv_bool(conn)
-
-            filepath = os.path.join(OUTPUT_DIR, filename)
-
-            received = 0
-            with open(filepath, "wb") as f:
-                file_code = filename_to_type(filename)
-                logging.info(f"[GATEWAY] File code for {filename}: {file_code}")
-                while received < filesize:
-                    chunk = recv_h_bytes(conn)
-                    f.write(chunk)
-                    received += len(chunk)  
-                    if file_code == 1:
-                        logging.info(f"[GATEWAY] Receiving chunk for file {filename}, total received: {received}/{filesize} bytes, len: {len(chunk)}")
-                    if len(chunk) != 0:
-                        if received >= filesize:
-                            handle_and_forward_chunk(0, file_code, 1, chunk)
-                        else:
-                            handle_and_forward_chunk(0, file_code, 0, chunk)
-                        # print("todo! forward chunk")
-
-            logging.info(f"Archivo recibido: {filename} ({filesize} bytes)")
-            if last_file:
-                break
-
-    except Exception as e:
-        logging.error(f"Error manejando cliente {addr}: {e}")
-
 def main():
     # Start result queue listener thread
-    result_thread = threading.Thread(target=listen_and_dump_result_q1, daemon=True)
-    result_thread.start()
-
-    with socket(AF_INET, SOCK_STREAM) as server:
-        server.bind((HOST, PORT))
-        server.listen(5)
-        logging.info(f"Escuchando en {HOST}:{PORT}...")
-
-        while True:
-            conn, addr = server.accept()
-            with conn:
-                handle_client(conn, addr)
+    gateway = gateway.Gateway()
+    gateway.run()
 
 if __name__ == "__main__":
     main()

@@ -5,6 +5,7 @@ from time import sleep
 from datetime import datetime
 from common.protocol import parse_message, row_to_dict, build_message
 from common.middleware import MessageMiddlewareQueue, MessageMiddlewareDisconnectedError, MessageMiddlewareMessageError
+import common.config as config
 
 # Configurable parameters (could be set via env vars or args)
 RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', os.environ.get('rabbitmq_server_HOST', 'rabbitmq_server'))
@@ -114,7 +115,7 @@ def consume_queue_t_items(queue, callback, item_categorizer_queue):
 
 def main():
     print("[filter_by_year] Worker starting...")
-    sleep(60)  # Esperar a que RabbitMQ esté listo
+    sleep(config.MIDDLEWARE_UP_TIME)  # Esperar a que RabbitMQ esté listo
     print(f"[filter_by_year] Connecting to RabbitMQ at {RABBITMQ_HOST}, queues: {QUEUE_T}, {QUEUE_T_ITEMS}, filter years: {FILTER_YEARS}")
     
     try:
