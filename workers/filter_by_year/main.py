@@ -96,10 +96,10 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
     except Exception as e:
         print(f"[t_items] Error decoding message: {e}", file=sys.stderr)
 
-def consume_queue_transactions(queue, callback, hour_filter_queue, store_user_categorizer_queue, categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange):
+def consume_queue_transactions(queue, callback, hour_filter_queue, categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange):
     print("[filter_by_year] Starting to consume transactions queue...")
     def wrapper(message):
-        callback(message, hour_filter_queue, store_user_categorizer_queue, categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange)
+        callback(message, hour_filter_queue, categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange)
     try:
         queue.start_consuming(wrapper)
     except MessageMiddlewareDisconnectedError:
