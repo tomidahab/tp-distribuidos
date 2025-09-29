@@ -2,10 +2,13 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-COPY main.py .
-
-COPY ../../common ./common
+COPY common /app/common
+COPY workers/birthday_dictionary/main.py /app/main.py
 
 RUN pip install pika
 
-CMD ["python", "main.py"]
+# Set Python path so it can find the common modules
+ENV PYTHONPATH="/app:/app/common"
+ENV PYTHONUNBUFFERED=1
+
+CMD ["python", "-u", "main.py"]

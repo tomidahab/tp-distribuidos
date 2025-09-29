@@ -9,7 +9,7 @@ from common.protocol import create_response_message
 # Debug imports
 try:
     from common.protocol import parse_message, row_to_dict, build_message, CSV_TYPES_REVERSE
-    from common.middleware import MessageMiddlewareQueue, MessageMiddlewareDisconnectedError, MessageMiddlewareMessageError
+    from common.middleware import MessageMiddlewareQueue, MessageMiddlewareDisconnectedError, MessageMiddlewareMessageError, MessageMiddlewareExchange
 except ImportError as e:
     print(f"[categorizer_q2] IMPORT ERROR: {e}", flush=True)
     sys.exit(1)
@@ -21,18 +21,61 @@ RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq_server')
 ITEMS_QUEUE = os.environ.get('ITEMS_QUEUE', 'categorizer_q2_items_queue')
 RECEIVER_QUEUE = os.environ.get('RECEIVER_QUEUE', 'categorizer_q2_receiver_queue')
 GATEWAY_QUEUE = os.environ.get('GATEWAY_QUEUE', 'query2_result_receiver_queue')
+TOPIC_EXCHANGE = os.environ.get('TOPIC_EXCHANGE', 'categorizer_q2_topic_exchange')
+FANOUT_EXCHANGE = os.environ.get('FANOUT_EXCHANGE', 'categorizer_q2_fanout_exchange')
+WORKER_INDEX = int(os.environ.get('WORKER_INDEX', 0))
+TOTAL_WORKERS = int(os.environ.get('TOTAL_WORKERS', 1))
+
+def get_months_for_worker(worker_index, total_workers):
+    months = list(range(1, 13))
+    chunk_size = (len(months) + total_workers - 1) // total_workers
+    start = worker_index * chunk_size
+    end = start + chunk_size
+    return months[start:end]
+
+def setup_queue_and_exchanges():
+    months = get_months_for_worker(WORKER_INDEX, TOTAL_WORKERS)
+    topic_keys = [f"month.{month}" for month in months]
+
+    topic_middleware = MessageMiddlewareExchange(
+        host=RABBITMQ_HOST,
+        exchange_name=TOPIC_EXCHANGE,
+        exchange_type='topic',
+        queue_name=RECEIVER_QUEUE,
+        routing_keys=topic_keys
+    )
+
+    _fanout_middleware = MessageMiddlewareExchange(
+        host=RABBITMQ_HOST,
+        exchange_name=FANOUT_EXCHANGE,
+        exchange_type='fanout',
+        queue_name=RECEIVER_QUEUE
+    )
+
+    _fanout_middleware_items = MessageMiddlewareExchange(
+        host=RABBITMQ_HOST,
+        exchange_name=FANOUT_EXCHANGE,
+        exchange_type='fanout',
+        queue_name=ITEMS_QUEUE
+    )
+
+    return topic_middleware
 
 def listen_for_items():
     items = []
     try:
-        queue = MessageMiddlewareQueue(RABBITMQ_HOST, ITEMS_QUEUE)
+        items_exchange = MessageMiddlewareExchange(
+            host=RABBITMQ_HOST,
+            exchange_name="categorizer_q2_items_fanout_exchange",
+            exchange_type="fanout",
+            queue_name=ITEMS_QUEUE
+        )
     except Exception as e:
-        print(f"[categorizer_q2] Failed to connect to RabbitMQ: {e}", file=sys.stderr)
+        print(f"[categorizer_q2] Failed to connect to RabbitMQ fanout exchange for items: {e}", file=sys.stderr)
         return items
 
     def on_message_callback(message: bytes):
         try:
-            # Naza: Acá va el parseo del mensaje para los items de la Q2 (Lo del mensaje de end es un ejemplo nomas)
             parsed_message = parse_message(message)
             type_of_message = parsed_message['csv_type']  
             client_id = parsed_message['client_id']
@@ -43,15 +86,13 @@ def listen_for_items():
 
             if is_last:
                 print("[categorizer_q2] Received end message, stopping item collection.")
-                # print("[categorizer_q2] items = ", items)
-                queue.stop_consuming()
+                items_exchange.stop_consuming()
         except Exception as e:
             print(f"[categorizer_q2] Error processing item message: {e}", file=sys.stderr)
 
     try:
-        # Agregar timeout para evitar quedarse colgado indefinidamente
-        print("[categorizer_q2] Starting to consume messages...")
-        queue.start_consuming(on_message_callback)
+        print("[categorizer_q2] Starting to consume menu items from fanout exchange...")
+        items_exchange.start_consuming(on_message_callback)
     except MessageMiddlewareDisconnectedError:
         print("[categorizer_q2] Disconnected from middleware.", file=sys.stderr)
     except MessageMiddlewareMessageError:
@@ -59,7 +100,7 @@ def listen_for_items():
     except Exception as e:
         print(f"[categorizer_q2] Unexpected error while consuming: {e}", file=sys.stderr)
     finally:
-        queue.close()
+        items_exchange.close()
     return items
 
 def listen_for_sales(items):
@@ -75,12 +116,11 @@ def listen_for_sales(items):
 
     def on_message_callback(message: bytes):
         try:
-            # Naza: Acá va el parseo del mensaje para las transacciones de la Q2 (Incluido el mensaje de finalización de la transmisión)
             parsed_message = parse_message(message)
             type_of_message = parsed_message['csv_type']  
             client_id = parsed_message['client_id']
             is_last = parsed_message['is_last']
-            # print(f"[categorizer_q2] Received transaction message, csv_type: {type_of_message}, is_last: {is_last}")  # Too verbose
+            print(f"[categorizer_q2] Received transaction message, csv_type: {type_of_message}, is_last: {is_last}")
             
             for row in parsed_message['rows']:
                 dic_fields_row = row_to_dict(row, type_of_message)

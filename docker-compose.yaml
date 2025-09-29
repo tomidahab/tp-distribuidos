@@ -76,16 +76,56 @@ services:
     depends_on:
       - rabbitmq_server
 
-  categorizer_q2_worker:
+  categorizer_q2_worker_1:
     build:
       context: .
       dockerfile: workers/categorizer_q2/Dockerfile
-    container_name: categorizer_q2_worker
+    container_name: categorizer_q2_worker_1
     environment:
       - RABBITMQ_HOST=rabbitmq_server
-      - ITEMS_QUEUE=categorizer_q2_items_queue
-      - RECEIVER_QUEUE=categorizer_q2_receiver_queue
+      - ITEMS_QUEUE=categorizer_q2_items_queue_1
+      - RECEIVER_QUEUE=categorizer_q2_receiver_queue_1
       - GATEWAY_QUEUE=query2_result_receiver_queue
+      - TOPIC_EXCHANGE=categorizer_q2_topic_exchange
+      - FANOUT_EXCHANGE=categorizer_q2_fanout_exchange
+      - WORKER_INDEX=0
+      - TOTAL_WORKERS=3
+    depends_on:
+      - rabbitmq_server
+      - gateway
+
+  categorizer_q2_worker_2:
+    build:
+      context: .
+      dockerfile: workers/categorizer_q2/Dockerfile
+    container_name: categorizer_q2_worker_2
+    environment:
+      - RABBITMQ_HOST=rabbitmq_server
+      - ITEMS_QUEUE=categorizer_q2_items_queue_2
+      - RECEIVER_QUEUE=categorizer_q2_receiver_queue_2
+      - GATEWAY_QUEUE=query2_result_receiver_queue
+      - TOPIC_EXCHANGE=categorizer_q2_topic_exchange
+      - FANOUT_EXCHANGE=categorizer_q2_fanout_exchange
+      - WORKER_INDEX=1
+      - TOTAL_WORKERS=3
+    depends_on:
+      - rabbitmq_server
+      - gateway
+
+  categorizer_q2_worker_3:
+    build:
+      context: .
+      dockerfile: workers/categorizer_q2/Dockerfile
+    container_name: categorizer_q2_worker_3
+    environment:
+      - RABBITMQ_HOST=rabbitmq_server
+      - ITEMS_QUEUE=categorizer_q2_items_queue_3
+      - RECEIVER_QUEUE=categorizer_q2_receiver_queue_3
+      - GATEWAY_QUEUE=query2_result_receiver_queue
+      - TOPIC_EXCHANGE=categorizer_q2_topic_exchange
+      - FANOUT_EXCHANGE=categorizer_q2_fanout_exchange
+      - WORKER_INDEX=2
+      - TOTAL_WORKERS=3
     depends_on:
       - rabbitmq_server
       - gateway
@@ -102,29 +142,29 @@ services:
     depends_on:
       - rabbitmq_server
 
-  categorizer_q4_worker:
-    build:
-      context: ./workers/categorizer_q4
-      dockerfile: Dockerfile
-    container_name: categorizer_q4_worker
-    environment:
-      - RABBITMQ_HOST=rabbitmq_server
-      - RECEIVER_QUEUE=store_user_categorizer_queue
-      - BIRTHDAY_DICT_QUEUE=birthday_dictionary_queue
-    depends_on:
-      - rabbitmq_server
+  # categorizer_q4_worker:
+  #   build:
+  #     context: ./workers/categorizer_q4
+  #     dockerfile: Dockerfile
+  #   container_name: categorizer_q4_worker
+  #   environment:
+  #     - RABBITMQ_HOST=rabbitmq_server
+  #     - RECEIVER_QUEUE=store_user_categorizer_queue
+  #     - BIRTHDAY_DICT_QUEUE=birthday_dictionary_queue
+  #   depends_on:
+  #     - rabbitmq_server
 
-  birthday_dictionary_worker:
-    build:
-      context: ./workers/birthday_dictionary
-      dockerfile: Dockerfile
-    container_name: birthday_dictionary_worker
-    environment:
-      - RABBITMQ_HOST=rabbitmq_server
-      - RECEIVER_QUEUE=birthday_dictionary_queue
-      - GATEWAY_REQUEST_QUEUE=birthday_dictionary_client_request_queue
-      - GATEWAY_CLIENT_DATA_QUEUE=gateway_client_data_queue
-      - QUERY4_ANSWER_QUEUE=query4_answer_queue
-    depends_on:
-      - rabbitmq_server
+  # birthday_dictionary_worker:
+  #   build:
+  #     context: ./workers/birthday_dictionary
+  #     dockerfile: Dockerfile
+  #   container_name: birthday_dictionary_worker
+  #   environment:
+  #     - RABBITMQ_HOST=rabbitmq_server
+  #     - RECEIVER_QUEUE=birthday_dictionary_queue
+  #     - GATEWAY_REQUEST_QUEUE=birthday_dictionary_client_request_queue
+  #     - GATEWAY_CLIENT_DATA_QUEUE=gateway_client_data_queue
+  #     - QUERY4_ANSWER_QUEUE=query4_answer_queue
+  #   depends_on:
+  #     - rabbitmq_server
 
