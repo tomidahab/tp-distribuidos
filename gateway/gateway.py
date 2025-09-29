@@ -43,17 +43,6 @@ class Gateway:
             self.skt = None
         logging.info('closing file descriptors and shutdown [sigterm]')
 
-    def send_response_from_file(self, response_type, source_file):
-        # Depending of the architecture, we might need semaphores somewhere to send all query responses
-        try:
-            with open(source_file, 'r') as f:
-                if self.stop_by_sigterm:
-                    return
-                response = f.read()
-                send_response(self.client_skt, response_type, response)
-        except Exception as e:
-            logging.error(f"Error leyendo archivo de respuesta {source_file}: {e}")
-
     def listen_queue_result_dictionary(self, result_queue, result_file, query_type):
         sleep(config.MIDDLEWARE_UP_TIME)  # Esperar a que RabbitMQ esté listo
         queue = MessageMiddlewareQueue(os.environ.get('RABBITMQ_HOST', 'rabbitmq_server'), result_queue)
@@ -62,20 +51,32 @@ class Gateway:
             # Write message to result_q1.csv (append mode)
             logging.info(f"[{result_queue}] Mensaje recibido en cola: {message}")
             size, dictionary_str = unpack_response_message(message)
-            with open(result_file, 'w+') as f:
-                if self.stop_by_sigterm:
-                    return
-                f.write(dictionary_str)
-                f.write('\n')
+
+            self.save_temp_results(result_file, [dictionary_str])
+            self.mark_query_completed(result_queue)
             logging.info(f"[{result_queue}] Mensaje guardado en {result_file}")
-            logging.info(f"[{result_queue}] Enviando respuesta de tamaño {size} al cliente con contenido: {dictionary_str}")
-            send_response(self.client_skt, query_type + 2, dictionary_str) # Q2=4, Q3=5
-            logging.info(f"[{result_queue}] Respuesta enviada.")
+            # logging.info(f"[{result_queue}] Enviando respuesta de tamaño {size} al cliente con contenido: {dictionary_str}")
+            # send_response(self.client_skt, query_type + 2, dictionary_str) # Q2=4, Q3=5
+            # logging.info(f"[{result_queue}] Respuesta enviada.")
 
         try:
             queue.start_consuming(on_message_callback)
         except Exception as e:
             logging.error(f"[{result_queue}] Error consumiendo mensajes: {e}")
+
+    def save_temp_results(self, result_file, iterable):
+        with open(result_file, 'a+') as f:
+            for line in iterable:
+                if self.stop_by_sigterm:
+                    return
+                f.write(line)
+                f.write('\n')
+
+    def mark_query_completed(self, result_queue):
+        with self.cond:
+            self.queries_done += 1
+            self.cond.notify_all()
+            logging.info(f"[{result_queue}] Query completada. Total queries done: {self.queries_done}")
 
     def listen_queue_result(self, result_queue, result_file):
         sleep(config.MIDDLEWARE_UP_TIME)  # Esperar a que RabbitMQ esté listo
@@ -86,19 +87,11 @@ class Gateway:
             logging.info(f"[{result_queue}] Mensaje recibido en cola: {result_queue}")
             parsed_message = parse_message(message)
             rows = parsed_message['rows']
-            with open(result_file, 'a+') as f:
-                for row in rows:
-                    if self.stop_by_sigterm:
-                        return
-                    f.write(row)
-                    f.write('\n')
+            self.save_temp_results(result_file, rows)
             logging.info(f"[{result_queue}] Mensaje guardado en {result_file}")
 
             if parsed_message["is_last"]:
-                with self.cond:
-                    self.queries_done += 1
-                    self.cond.notify_all()
-                    logging.info(f"[{result_queue}] Query completada. Total queries done: {self.queries_done}")
+                self.mark_query_completed(result_queue)
 
                 # logging.info(f"[{result_queue}] Mensaje final recibido, enviando respuesta al cliente.")
                 # self.send_response_from_file(parsed_message['csv_type'], result_file)
@@ -112,6 +105,7 @@ class Gateway:
 
     def handle_client(self, addr):
         logging.info(f"Conexión recibida de {addr}")
+        self.clear_temp_files()
         try:
             while True:
                 # NOTE: `recv` is unreliable, and `recv_all` guarantees that we will either receive all the bytes
@@ -155,12 +149,10 @@ class Gateway:
                 return
 
             self.send_file_result(RESULT_Q1_FILE)
-            os.remove(RESULT_Q1_FILE)
             # self.send_file_result(RESULT_Q2_FILE)
-            # os.remove(RESULT_Q2_FILE)
             # self.send_file_result(RESULT_Q3_FILE)
-            # os.remove(RESULT_Q3_FILE)
 
+            self.clear_temp_files()
             # self.send_response_from_file(1, RESULT_Q1_FILE)
             # self.send_response_from_file(1, RESULT_Q2_FILE)
             # self.send_response_from_file(1, RESULT_Q3_FILE)
@@ -183,6 +175,17 @@ class Gateway:
                     return
             send_lines_batch(self.client_skt,1, lines_batch, True)
             logging.info(f"Envio completado al cliente.")
+
+    def clear_temp_files(self):
+        try:
+            if os.path.exists(RESULT_Q1_FILE):
+                os.remove(RESULT_Q1_FILE)
+            if os.path.exists(RESULT_Q2_FILE):
+                os.remove(RESULT_Q2_FILE)
+            if os.path.exists(RESULT_Q3_FILE):
+                os.remove(RESULT_Q3_FILE)
+        except Exception as e:
+            logging.error(f"Error eliminando archivos temporales: {e}")
 
     def run(self):
         # Start result queue listener thread
