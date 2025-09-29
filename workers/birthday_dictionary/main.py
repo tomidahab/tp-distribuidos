@@ -1,7 +1,7 @@
 import os
 import sys
 from collections import defaultdict
-from common.protocol import protocol
+from common.protocol import parse_message, build_message
 from common.middleware import MessageMiddlewareQueue, MessageMiddlewareDisconnectedError, MessageMiddlewareMessageError
 
 RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq_server')
@@ -9,6 +9,7 @@ RECEIVER_QUEUE = os.environ.get('RECEIVER_QUEUE', 'birthday_dictionary_queue')
 GATEWAY_REQUEST_QUEUE = os.environ.get('GATEWAY_REQUEST_QUEUE', 'birthday_dictionary_client_request_queue')
 GATEWAY_CLIENT_DATA_QUEUE = os.environ.get('GATEWAY_CLIENT_DATA_QUEUE', 'gateway_client_data_queue')
 QUERY4_ANSWER_QUEUE = os.environ.get('QUERY4_ANSWER_QUEUE', 'query4_answer_queue')
+CATEGORIZER_Q4_WORKERS = int(os.environ.get('AMOUNT_OF_WORKERS', 3))
 
 def listen_for_top_users():
     messages = []
@@ -16,15 +17,26 @@ def listen_for_top_users():
     queue = MessageMiddlewareQueue(RABBITMQ_HOST, RECEIVER_QUEUE)
     print(f"[birthday_dictionary] Listening for top users on queue: {RECEIVER_QUEUE}")
 
-    def on_message_callback(message: bytes):
-        msg_decoded = protocol.decode_result_message(message)
-        messages.append(msg_decoded)
-        for user in msg_decoded.get('top_users', []):
-            user_ids.add(user['user_id'])
+    # Get the number of categorizer_q4 workers from env
+    end_messages_received = 0
 
-        if msg_decoded.get('type') == 'end':
-            print("[birthday_dictionary] Received end message, stopping top user collection.")
-            queue.stop_consuming()
+    def on_message_callback(message: bytes):
+        nonlocal end_messages_received
+        parsed_message = parse_message(message)
+        top_users = []
+        for row in parsed_message['rows']:
+            parts = row.split(',')
+            if len(parts) == 3:
+                store_id, user_id, count = parts
+                top_users.append({'store_id': store_id, 'user_id': user_id, 'count': int(count)})
+                user_ids.add(user_id)
+        messages.append({'top_users': top_users, 'is_last': parsed_message['is_last']})
+        if parsed_message['is_last']:
+            end_messages_received += 1
+            print(f"[birthday_dictionary] Received end message {end_messages_received}/{CATEGORIZER_Q4_WORKERS} from categorizer_q4 workers.")
+            if end_messages_received >= CATEGORIZER_Q4_WORKERS:
+                print("[birthday_dictionary] All end messages received, stopping top user collection.")
+                queue.stop_consuming()
 
     try:
         queue.start_consuming(on_message_callback)
@@ -38,25 +50,26 @@ def listen_for_top_users():
 
 def request_client_data():
     queue = MessageMiddlewareQueue(RABBITMQ_HOST, GATEWAY_REQUEST_QUEUE)
-    request = {'request': 'all_clients'}
-    message = protocol.encode_client_request_message(request)
+    # Use build_message to request client data (empty rows, type 5 for client request, is_last=1)
+    message, _ = build_message(0, 5, 1, [])
     queue.send(message)
     print(f"[birthday_dictionary] Requested all client data from gateway.")
     queue.close()
 
 def listen_for_client_data(user_ids):
-
     client_birthdays = {}
     queue = MessageMiddlewareQueue(RABBITMQ_HOST, GATEWAY_CLIENT_DATA_QUEUE)
     print(f"[birthday_dictionary] Listening for client data on queue: {GATEWAY_CLIENT_DATA_QUEUE}")
 
     def on_message_callback(message: bytes):
-        client_data = protocol.decode_client_data_message(message)
-        client_id = client_data.get('client_id')
-        birthday = client_data.get('birthday')
-        if client_id in user_ids:
-            client_birthdays[client_id] = birthday
-        if client_data.get('type') == 'end':
+        parsed_message = parse_message(message)
+        for row in parsed_message['rows']:
+            parts = row.split(',')
+            if len(parts) == 2:
+                client_id, birthday = parts
+                if client_id in user_ids:
+                    client_birthdays[client_id] = birthday
+        if parsed_message['is_last']:
             print("[birthday_dictionary] Received end message, stopping client data collection.")
             queue.stop_consuming()
 
@@ -87,9 +100,16 @@ def append_birthdays_to_messages(messages, client_birthdays):
 def send_enriched_messages_to_gateway(enriched_messages):
     queue = MessageMiddlewareQueue(RABBITMQ_HOST, QUERY4_ANSWER_QUEUE)
     for msg in enriched_messages:
-        message = protocol.encode_result_message(msg)
+        # Prepare rows as CSV lines for each top user
+        rows = []
+        for user in msg.get('top_users', []):
+            # Format: store_id,user_id,count,birthday
+            row = f"{user['store_id']},{user['user_id']},{user['count']},{user.get('birthday', '')}"
+            rows.append(row)
+        # Use build_message to encode the result
+        message, _ = build_message(0, 4, int(msg.get('is_last', 0)), rows)
         queue.send(message)
-        print(f"[birthday_dictionary] Sent enriched message to gateway: {msg}")
+        print(f"[birthday_dictionary] Sent enriched message to gateway: {rows}")
     queue.close()
 
 def main():

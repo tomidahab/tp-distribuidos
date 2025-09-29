@@ -2,6 +2,7 @@ import os
 import sys
 import re
 import logging
+import time
 from client.client import Client
 from time import sleep
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -41,6 +42,7 @@ def collect_files(folder):
 
 def main(folder):
     client = Client()
+    time.sleep(60)
     file_list = collect_files(folder)
     if not file_list:
         logging.warning("No se encontraron archivos para enviar.")
