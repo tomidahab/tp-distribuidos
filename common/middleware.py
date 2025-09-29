@@ -90,9 +90,27 @@ class MessageMiddleware(ABC):
             raise MessageMiddlewareDeleteError(f"Error deleting queue: {e}")
 
 class MessageMiddlewareExchange(MessageMiddleware):
-    def __init__(self, host, exchange_name, route_keys):
-        super().__init__(host, exchange_name)
-        self.route_keys = route_keys
+    def __init__(self, host, exchange_name, exchange_type, queue_name, routing_keys=None):
+        super().__init__(host, queue_name)
+        self.exchange_name = exchange_name
+        self.exchange_type = exchange_type
+        self.routing_keys = routing_keys or []
+        # Declare exchange
+        self.channel.exchange_declare(exchange=self.exchange_name, exchange_type=self.exchange_type, durable=True)
+        # Bind queue to exchange with routing keys
+        if self.exchange_type == 'topic':
+            for key in self.routing_keys:
+                self.channel.queue_bind(exchange=self.exchange_name, queue=self.queue_name, routing_key=key)
+        elif self.exchange_type == 'fanout':
+            self.channel.queue_bind(exchange=self.exchange_name, queue=self.queue_name)
+
+    def send(self, message, routing_key=''):
+        self.channel.basic_publish(
+            exchange=self.exchange_name,
+            routing_key=routing_key,
+            body=message,
+            properties=pika.BasicProperties(delivery_mode=2)
+        )
 
 class MessageMiddlewareQueue(MessageMiddleware):
     def __init__(self, host, queue_name):
