@@ -46,6 +46,9 @@ def setup_queue_and_exchanges():
         routing_keys=topic_keys
     )
 
+    print(f"[categorizer_q2] Worker {WORKER_INDEX} assigned months: {months}")
+    print("topic_keys:", topic_keys)
+
     _fanout_middleware = MessageMiddlewareExchange(
         host=RABBITMQ_HOST,
         exchange_name=FANOUT_EXCHANGE,
@@ -104,13 +107,13 @@ def listen_for_items():
         items_exchange.close()
     return items
 
-def listen_for_sales(items):
+def listen_for_sales(items, topic_middleware):
     # Dictionary: {(item_id, month): {'count': int, 'sum': float}}
     sales_stats = defaultdict(lambda: {'count': int(0), 'sum': float(0.0)})
     try:
-        print(f"[categorizer_q2] Attempting to connect to RabbitMQ at {RABBITMQ_HOST}")
-        queue = MessageMiddlewareQueue(RABBITMQ_HOST, RECEIVER_QUEUE)
-        print(f"[categorizer_q2] Connected successfully. Listening for sales on queue: {RECEIVER_QUEUE}")
+        print(f"[categorizer_q2] Using topic middleware for queue: {topic_middleware.queue_name}")
+        queue = topic_middleware
+        print(f"[categorizer_q2] Connected successfully. Listening for sales on topic exchange with routing keys: {getattr(topic_middleware, 'routing_keys', 'N/A')}")
     except Exception as e:
         print(f"[categorizer_q2] Failed to connect to RabbitMQ: {e}", file=sys.stderr)
         return sales_stats
@@ -121,7 +124,7 @@ def listen_for_sales(items):
             type_of_message = parsed_message['csv_type']  
             client_id = parsed_message['client_id']
             is_last = parsed_message['is_last']
-            print(f"[categorizer_q2] Received transaction message, csv_type: {type_of_message}, is_last: {is_last}")
+            print(f"[categorizer_q2] Received transaction message, csv_type: {type_of_message}, is_last: {is_last}, rows: {len(parsed_message['rows'])}")
             
             for row in parsed_message['rows']:
                 dic_fields_row = row_to_dict(row, type_of_message)
@@ -284,7 +287,7 @@ def main():
         print("[categorizer_q2] Starting worker...")
         
         # Setup queues and exchanges
-        setup_queue_and_exchanges()
+        topic_middleware = setup_queue_and_exchanges()
         print("[categorizer_q2] Queues and exchanges setup completed.")
         
         items = listen_for_items()
@@ -294,7 +297,8 @@ def main():
             print("[categorizer_q2] No items received, exiting.")
             return
             
-        sales_stats = listen_for_sales(items)
+        print(f"[categorizer_q2] Starting to consume sales messages from topic exchange...")
+        sales_stats = listen_for_sales(items, topic_middleware)
         print("[categorizer_q2] Final sales stats:")
         for (item_id, month), stats in sales_stats.items():
             print(f"Item: {item_id}, Month: {month}, Count: {stats['count']}, Sum: {stats['sum']}")

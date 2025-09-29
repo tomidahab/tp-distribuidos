@@ -52,7 +52,7 @@ def on_message_callback_transactions(message: bytes, hour_filter_queue, store_us
             # Naza: Acá va el recorte del mensaje para la Q1 y Q3
             hour_filter_queue.send(new_message)
             # Naza: Acá va el recorte del mensaje para la Q4
-            store_user_categorizer_queue.send(new_message)
+            #store_user_categorizer_queue.send(new_message)
         # else:
         #     print(f"[transactions] Mensaje filtrado por año, 0 rows para enviar")  # Too verbose 
     except Exception as e:
@@ -80,10 +80,11 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
 
 
         for month, rows in rows_by_month.items():
-            new_message, _ = build_message(client_id, type_of_message, is_last, rows)
-            routing_key = f"month.{month}"
-            #print(f"[filter_by_year] Sending {len(rows)} rows for month {month} to categorizer_q2 with routing key {routing_key}")
-            item_categorizer_exchange.send(new_message, routing_key=routing_key)
+            if rows != []:
+                new_message, _ = build_message(client_id, type_of_message, is_last, rows)
+                routing_key = f"month.{month}"
+                print(f"[filter_by_year] Sending {len(rows)} rows for month {month} to categorizer_q2 with routing key {routing_key}")
+                item_categorizer_exchange.send(new_message, routing_key=routing_key)
 
         if is_last == 1:
             end_message, _ = build_message(client_id, type_of_message, is_last, [])
