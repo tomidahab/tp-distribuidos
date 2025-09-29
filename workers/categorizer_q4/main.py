@@ -1,33 +1,50 @@
 import os
 import sys
 from collections import defaultdict, Counter
-from common.protocol import protocol
-from common.middleware import MessageMiddlewareQueue, MessageMiddlewareDisconnectedError, MessageMiddlewareMessageError
+from common.protocol import protocol, build_message, parse_message
+from common.middleware import MessageMiddlewareExchange, MessageMiddlewareDisconnectedError, MessageMiddlewareMessageError, MessageMiddlewareQueue
 
 RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq_server')
 RECEIVER_QUEUE = os.environ.get('RECEIVER_QUEUE', 'store_user_categorizer_queue')
+TOPIC_EXCHANGE = os.environ.get('TOPIC_EXCHANGE', 'categorizer_q4_topic_exchange')
+FANOUT_EXCHANGE = os.environ.get('FANOUT_EXCHANGE', 'categorizer_q4_fanout_exchange')
+WORKER_INDEX = int(os.environ.get('WORKER_INDEX', 0))
 BIRTHDAY_DICT_QUEUE = os.environ.get('BIRTHDAY_DICT_QUEUE', 'birthday_dictionary_queue')
+AMOUNT_OF_WORKERS = int(os.environ.get('AMOUNT_OF_WORKERS', 1))
 
 def listen_for_transactions():
-
     store_user_counter = defaultdict(Counter)
-    queue = MessageMiddlewareQueue(RABBITMQ_HOST, RECEIVER_QUEUE)
-    print(f"[categorizer_q4] Listening for transactions on queue: {RECEIVER_QUEUE}")
+
+    topic_routing_key = f"store.{WORKER_INDEX}"
+    queue = MessageMiddlewareExchange(
+        host=RABBITMQ_HOST,
+        exchange_name=TOPIC_EXCHANGE,
+        exchange_type='topic',
+        queue_name=RECEIVER_QUEUE,
+        routing_keys=[topic_routing_key]
+    )
+    _fanout_queue = MessageMiddlewareExchange(
+        host=RABBITMQ_HOST,
+        exchange_name=FANOUT_EXCHANGE,
+        exchange_type='fanout',
+        queue_name=RECEIVER_QUEUE
+    )
+
+    print(f"[categorizer_q4] Listening for transactions on queue: {RECEIVER_QUEUE} (topic key: {topic_routing_key})")
 
     def on_message_callback(message: bytes):
-
-        # Usar el protocolo para desencodear el mensaje
         message_decoded = protocol.decode_transaction_message(message)
-
         store_id = message_decoded.get('store_id')
         user_id = message_decoded.get('user_id')
+        msg_type = message_decoded.get('type')
+
+        if msg_type == 'end':
+            print("[categorizer_q4] Received end message, stopping transaction collection.")
+            queue.stop_consuming()
+            return
 
         if None not in (store_id, user_id):
             store_user_counter[store_id][user_id] += 1
-        # Naza: Hay que definir el mensaje de fin
-        if message_decoded.get('type') == 'end':
-            print("[categorizer_q4] Received end message, stopping transaction collection.")
-            queue.stop_consuming()
 
     try:
         queue.start_consuming(on_message_callback)
@@ -48,15 +65,14 @@ def get_top_users_per_store(store_user_counter, top_n=3):
 
 def send_results_to_birthday_dict(top_users):
     queue = MessageMiddlewareQueue(RABBITMQ_HOST, BIRTHDAY_DICT_QUEUE)
+
+    rows = []
     for store_id, users in top_users.items():
-        result = {
-            'store_id': store_id,
-            'top_users': [{'user_id': user_id, 'purchase_count': count} for user_id, count in users]
-        }
-        # Naza: Usar el protocolo para encodear el mensaje
-        message = protocol.encode_result_message(result)
-        queue.send(message)
-        print(f"[categorizer_q4] Sent result to Birthday_Dictionary: {result}")
+        for user_id, count in users:
+            rows.append(f"{store_id},{user_id},{count}")
+    message, _ = build_message(0, 4, 1, rows)  
+    queue.send(message)
+    print(f"[categorizer_q4] Sent result to Birthday_Dictionary: {rows}")
     queue.close()
 
 def main():
