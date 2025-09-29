@@ -88,6 +88,7 @@ services:
       - GATEWAY_QUEUE=query2_result_receiver_queue
       - TOPIC_EXCHANGE=categorizer_q2_topic_exchange
       - FANOUT_EXCHANGE=categorizer_q2_fanout_exchange
+      - ITEMS_FANOUT_EXCHANGE=categorizer_q2_items_fanout_exchange
       - WORKER_INDEX=0
       - TOTAL_WORKERS=3
     depends_on:
@@ -106,6 +107,7 @@ services:
       - GATEWAY_QUEUE=query2_result_receiver_queue
       - TOPIC_EXCHANGE=categorizer_q2_topic_exchange
       - FANOUT_EXCHANGE=categorizer_q2_fanout_exchange
+      - ITEMS_FANOUT_EXCHANGE=categorizer_q2_items_fanout_exchange
       - WORKER_INDEX=1
       - TOTAL_WORKERS=3
     depends_on:
@@ -124,6 +126,7 @@ services:
       - GATEWAY_QUEUE=query2_result_receiver_queue
       - TOPIC_EXCHANGE=categorizer_q2_topic_exchange
       - FANOUT_EXCHANGE=categorizer_q2_fanout_exchange
+      - ITEMS_FANOUT_EXCHANGE=categorizer_q2_items_fanout_exchange
       - WORKER_INDEX=2
       - TOTAL_WORKERS=3
     depends_on:

@@ -23,6 +23,7 @@ RECEIVER_QUEUE = os.environ.get('RECEIVER_QUEUE', 'categorizer_q2_receiver_queue
 GATEWAY_QUEUE = os.environ.get('GATEWAY_QUEUE', 'query2_result_receiver_queue')
 TOPIC_EXCHANGE = os.environ.get('TOPIC_EXCHANGE', 'categorizer_q2_topic_exchange')
 FANOUT_EXCHANGE = os.environ.get('FANOUT_EXCHANGE', 'categorizer_q2_fanout_exchange')
+ITEMS_FANOUT_EXCHANGE = os.environ.get('ITEMS_FANOUT_EXCHANGE', 'categorizer_q2_items_fanout_exchange')
 WORKER_INDEX = int(os.environ.get('WORKER_INDEX', 0))
 TOTAL_WORKERS = int(os.environ.get('TOTAL_WORKERS', 1))
 
@@ -54,7 +55,7 @@ def setup_queue_and_exchanges():
 
     _fanout_middleware_items = MessageMiddlewareExchange(
         host=RABBITMQ_HOST,
-        exchange_name=FANOUT_EXCHANGE,
+        exchange_name=ITEMS_FANOUT_EXCHANGE,
         exchange_type='fanout',
         queue_name=ITEMS_QUEUE
     )
@@ -66,7 +67,7 @@ def listen_for_items():
     try:
         items_exchange = MessageMiddlewareExchange(
             host=RABBITMQ_HOST,
-            exchange_name="categorizer_q2_items_fanout_exchange",
+            exchange_name=ITEMS_FANOUT_EXCHANGE,
             exchange_type="fanout",
             queue_name=ITEMS_QUEUE
         )
@@ -281,6 +282,10 @@ def main():
         print("[categorizer_q2] Waiting for RabbitMQ to be ready...")
         time.sleep(30)  # Esperar a que RabbitMQ esté listo
         print("[categorizer_q2] Starting worker...")
+        
+        # Setup queues and exchanges
+        setup_queue_and_exchanges()
+        print("[categorizer_q2] Queues and exchanges setup completed.")
         
         items = listen_for_items()
         print(f"[categorizer_q2] Collected {len(items)} items: {items}")
