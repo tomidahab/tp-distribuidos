@@ -84,7 +84,7 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
 
         for month, rows in rows_by_month.items():
             if rows != []:
-                new_message, _ = build_message(client_id, type_of_message, is_last, rows)
+                new_message, _ = build_message(client_id, type_of_message, 0, rows)
                 routing_key = f"month.{month}"
                 print(f"[filter_by_year] Sending {len(rows)} rows for month {month} to categorizer_q2 with routing key {routing_key}")
                 item_categorizer_exchange.send(new_message, routing_key=routing_key)
