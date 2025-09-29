@@ -20,22 +20,23 @@ FILTER_YEARS = [
 ]
 TOPIC_EXCHANGE = os.environ.get('TOPIC_EXCHANGE', 'categorizer_q2_topic_exchange')
 
+# Add these environment variables
+CATEGORIZER_Q4_TOPIC_EXCHANGE = os.environ.get('CATEGORIZER_Q4_TOPIC_EXCHANGE', 'categorizer_q4_topic_exchange')
+CATEGORIZER_Q4_FANOUT_EXCHANGE = os.environ.get('CATEGORIZER_Q4_FANOUT_EXCHANGE', 'categorizer_q4_fanout_exchange')
+CATEGORIZER_Q4_WORKERS = int(os.environ.get('CATEGORIZER_Q4_WORKERS', 3))
+
 print(f"[filter_by_year] Starting with FILTER_YEARS: {FILTER_YEARS}")
 
 
-def on_message_callback_transactions(message: bytes, hour_filter_queue, store_user_categorizer_queue):
+def on_message_callback_transactions(message: bytes, hour_filter_queue, categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange):
     try:
-        # Acá va el parseo del mensaje para transactions
         parsed_message = parse_message(message)
         type_of_message = parsed_message['csv_type']  
         client_id = parsed_message['client_id']
         is_last = parsed_message['is_last']
         new_rows = []
-        # print(f"[transactions] Procesando mensaje con {len(parsed_message['rows'])} rows")  # Keep only for important batches
         for row in parsed_message['rows']:
-            # print(f"[transactions] Procesando row: {row}")  # Too verbose for large files
             dic_fields_row = row_to_dict(row, type_of_message)
-            # Parse year from created_at field
             try:
                 created_at = dic_fields_row['created_at']
                 msg_year = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S").year
@@ -44,18 +45,21 @@ def on_message_callback_transactions(message: bytes, hour_filter_queue, store_us
             except Exception as e:
                 print(f"[transactions] Error parsing created_at: {created_at} ({e})", file=sys.stderr)
 
-        
-        # Important to forward the last message even if no rows matched the filter
         if new_rows or is_last: 
-            # print(f"[transactions] Enviando mensaje con {len(new_rows)} rows")  # Less verbose
-
             new_message, _ = build_message(client_id, type_of_message, is_last, new_rows)
-            # Naza: Acá va el recorte del mensaje para la Q1 y Q3
             hour_filter_queue.send(new_message)
-            # Naza: Acá va el recorte del mensaje para la Q4
-            #store_user_categorizer_queue.send(new_message)
-        # else:
-        #     print(f"[transactions] Mensaje filtrado por año, 0 rows para enviar")  # Too verbose 
+            for row in new_rows:
+                dic_fields_row = row_to_dict(row, type_of_message)
+                store_id = int(dic_fields_row['store_id'])
+                routing_key = f"store.{store_id % CATEGORIZER_Q4_WORKERS}"
+                q4_message, _ = build_message(client_id, type_of_message, 0, [row])
+                categorizer_q4_topic_exchange.send(q4_message, routing_key=routing_key)
+
+        if is_last:
+            end_message, _ = build_message(client_id, type_of_message, 1, [])
+            categorizer_q4_fanout_exchange.send(end_message)
+            print("[filter_by_year] Sent END message to categorizer_q4 via fanout exchange.")
+
     except Exception as e:
         print(f"[transactions] Error decoding message: {e}", file=sys.stderr)
 
@@ -65,7 +69,6 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
         type_of_message = parsed_message['csv_type']  
         client_id = parsed_message['client_id']
         is_last = parsed_message['is_last']
-
 
         rows_by_month = defaultdict(list)
         for row in parsed_message['rows']:
@@ -78,7 +81,6 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
                     rows_by_month[month].append(row)
             except Exception as e:
                 print(f"[t_items] Error parsing created_at: {dic_fields_row.get('created_at', '')} ({e})", file=sys.stderr)
-
 
         for month, rows in rows_by_month.items():
             if rows != []:
@@ -94,10 +96,10 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
     except Exception as e:
         print(f"[t_items] Error decoding message: {e}", file=sys.stderr)
 
-def consume_queue_transactions(queue, callback, hour_filter_queue, store_user_categorizer_queue):
+def consume_queue_transactions(queue, callback, hour_filter_queue, store_user_categorizer_queue, categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange):
     print("[filter_by_year] Starting to consume transactions queue...")
     def wrapper(message):
-        callback(message, hour_filter_queue, store_user_categorizer_queue)
+        callback(message, hour_filter_queue, store_user_categorizer_queue, categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange)
     try:
         queue.start_consuming(wrapper)
     except MessageMiddlewareDisconnectedError:
@@ -122,7 +124,7 @@ def consume_queue_t_items(queue, callback, item_categorizer_exchange, item_categ
 
 def main():
     print("[filter_by_year] Worker starting...")
-    sleep(config.MIDDLEWARE_UP_TIME)  # Esperar a que RabbitMQ esté listo
+    sleep(config.MIDDLEWARE_UP_TIME)  
     print(f"[filter_by_year] Connecting to RabbitMQ at {RABBITMQ_HOST}, queues: {QUEUE_T}, {QUEUE_T_ITEMS}, filter years: {FILTER_YEARS}")
     
     try:
@@ -134,10 +136,7 @@ def main():
         
         hour_filter_queue = MessageMiddlewareQueue(RABBITMQ_HOST, HOUR_FILTER_QUEUE)
         print(f"[filter_by_year] Connected to hour filter queue: {HOUR_FILTER_QUEUE}")
-        
-        store_user_categorizer_queue = MessageMiddlewareQueue(RABBITMQ_HOST, STORE_USER_CATEGORIZER_QUEUE)
-        print(f"[filter_by_year] Connected to store user categorizer queue: {STORE_USER_CATEGORIZER_QUEUE}")
-        
+                
         item_categorizer_exchange = MessageMiddlewareExchange(
             host=RABBITMQ_HOST,
             exchange_name=TOPIC_EXCHANGE,
@@ -155,12 +154,29 @@ def main():
         )
         print(f"[filter_by_year] Connected to item categorizer fanout exchange: {FANOUT_EXCHANGE}")
         
+        global categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange
+        categorizer_q4_topic_exchange = MessageMiddlewareExchange(
+            host=RABBITMQ_HOST,
+            exchange_name=CATEGORIZER_Q4_TOPIC_EXCHANGE,
+            exchange_type='topic',
+            queue_name='', 
+        )
+        print(f"[filter_by_year] Connected to categorizer_q4 topic exchange: {CATEGORIZER_Q4_TOPIC_EXCHANGE}")
+        
+        categorizer_q4_fanout_exchange = MessageMiddlewareExchange(
+            host=RABBITMQ_HOST,
+            exchange_name=CATEGORIZER_Q4_FANOUT_EXCHANGE,
+            exchange_type='fanout',
+            queue_name='', 
+        )
+        print(f"[filter_by_year] Connected to categorizer_q4 fanout exchange: {CATEGORIZER_Q4_FANOUT_EXCHANGE}")
+        
     except Exception as e:
         print(f"[filter_by_year] Error connecting to RabbitMQ: {e}", file=sys.stderr)
         return
 
     print("[filter_by_year] Starting consumer threads...")
-    t1 = threading.Thread(target=consume_queue_transactions, args=(queue_t, on_message_callback_transactions, hour_filter_queue, store_user_categorizer_queue))
+    t1 = threading.Thread(target=consume_queue_transactions, args=(queue_t, on_message_callback_transactions, hour_filter_queue, categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange))
     t2 = threading.Thread(
         target=consume_queue_t_items,
         args=(queue_t_items, on_message_callback_t_items, item_categorizer_exchange, item_categorizer_fanout_exchange)
@@ -182,7 +198,6 @@ def main():
         queue_t.close()
         queue_t_items.close()
         hour_filter_queue.close()
-        store_user_categorizer_queue.close()
 
 if __name__ == "__main__":
     main()
