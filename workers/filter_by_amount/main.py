@@ -10,7 +10,7 @@ QUEUE_NAME = os.environ.get('QUEUE_NAME', 'filter_by_amount_queue')
 MIN_AMOUNT = float(os.environ.get('MIN_AMOUNT', 15.0))
 RESULT_QUEUE = os.environ.get('RESULT_QUEUE', 'query1_result_receiver_queue')
 
-def filter_message_by_amount(parsed_message, min_amount: float) -> bool:
+def filter_message_by_amount(parsed_message, min_amount: float) -> list:
     try:
         type_of_message = parsed_message['csv_type']
         new_rows = []
@@ -22,12 +22,10 @@ def filter_message_by_amount(parsed_message, min_amount: float) -> bool:
                     new_rows.append(row)
             except Exception as e:
                 print(f"[amount] Error parsing amount: {dic_fields_row.get('amount')} ({e})", file=sys.stderr)
-        if new_rows != []:
-            return new_rows
+        return new_rows
     except Exception as e:
         print(f"[filter] Error parsing message: {e}", file=sys.stderr)
-        return False
-    return False
+        return []
 
 def on_message_callback(message: bytes, receiver_queue, queue_result):
     parsed_message = parse_message(message)
@@ -35,7 +33,7 @@ def on_message_callback(message: bytes, receiver_queue, queue_result):
     client_id = parsed_message['client_id']
     is_last = parsed_message['is_last']
     filtered_rows = filter_message_by_amount(parsed_message, MIN_AMOUNT)
-    if filtered_rows:
+    if filtered_rows or is_last:
         new_message, _ = build_message(client_id, type_of_message, is_last, filtered_rows)
         queue_result.send(new_message)
         print(f"[worker] Message passed amount filter: {len(filtered_rows)}, sending to RESULT_QUEUE")
