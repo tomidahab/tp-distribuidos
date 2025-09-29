@@ -27,8 +27,17 @@ def collect_files(folder):
     transactions = sorted([f for f in files if PATTERNS["transactions"].match(f)])
     transaction_items = sorted([f for f in files if PATTERNS["transaction_items"].match(f)])
     users = sorted([f for f in files if PATTERNS["users"].match(f)])
-    ordered = menu_items + transactions + transaction_items + users
-    return [os.path.join(folder, f) for f in ordered]
+    # ordered = menu_items + transactions + transaction_items + users
+    # return [os.path.join(folder, f) for f in ordered]
+    datasets_list = []
+    def add_files(files):
+        if files:
+            datasets_list.append([os.path.join(folder, f) for f in files])
+    add_files(menu_items)
+    add_files(transactions)
+    add_files(transaction_items)
+    add_files(users)
+    return datasets_list
 
 def main(folder):
     client = Client()
@@ -37,7 +46,11 @@ def main(folder):
         logging.warning("No se encontraron archivos para enviar.")
         return
     
-    client.run(file_list)
+    if len(file_list) < 4:
+        logging.warning("No se encontraron todos los archivos necesarios para las consultas.")
+        client.run(file_list, None)
+    else:
+        client.run(file_list[:-1], file_list[3])
 
 if __name__ == "__main__":
     folder = os.path.join("data", "input") if len(sys.argv) < 2 else sys.argv[1]

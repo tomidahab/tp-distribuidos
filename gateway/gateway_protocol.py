@@ -31,6 +31,13 @@ def recv_lines_batch(skt: socket):
         lines_batch.append(recv_h_str(skt))
     return data_type, lines_batch, is_last
 
+def send_lines_batch(skt: socket, data_type, lines_batch, is_last):
+    send_int(skt, data_type)
+    send_int(skt, len(lines_batch))
+    send_bool(skt, is_last)
+    for line in lines_batch:
+        send_h_str(skt, line)
+
 def send_response(skt: socket, response_type, response = ""):
     send_int(skt, response_type)
     send_h_str(skt, response)

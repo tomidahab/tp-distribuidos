@@ -13,7 +13,7 @@ END_HOUR = int(os.environ.get('END_HOUR', 11))
 QUEUE_FILTER_AMOUNT = os.environ.get('QUEUE_FILTER_AMOUNT', 'filter_by_amount_queue')
 QUEUE_CATEGORIZER_STORES_SEMESTER = os.environ.get('QUEUE_CATEGORIZER_STORES_SEMESTER', 'store_semester_categorizer_queue')
 
-def filter_message_by_hour(parsed_message, start_hour: int, end_hour: int) -> bool:
+def filter_message_by_hour(parsed_message, start_hour: int, end_hour: int) -> list:
     try:
         type_of_message = parsed_message['csv_type']
 
@@ -29,11 +29,11 @@ def filter_message_by_hour(parsed_message, start_hour: int, end_hour: int) -> bo
                     new_rows.append(row)
             except Exception as e:
                 print(f"[transactions] Error parsing created_at: {created_at} ({e})", file=sys.stderr)
-        if new_rows != []:
-            return new_rows
+        
+        return new_rows
     except Exception as e:
         print(f"[filter] Error parsing message: {e}", file=sys.stderr)
-        return False
+        return []
 
 def on_message_callback(message: bytes, queue_filter_amount, queue_categorizer_stores_semester):
     print("[worker] Received a message!", flush=True)
@@ -42,16 +42,17 @@ def on_message_callback(message: bytes, queue_filter_amount, queue_categorizer_s
     client_id = parsed_message['client_id']
     is_last = parsed_message['is_last']
     filtered_rows = filter_message_by_hour(parsed_message, START_HOUR, END_HOUR)
-    if filtered_rows:
+    if filtered_rows or is_last:
         print(f"[worker] Number of rows on the message passed hour filter: {len(filtered_rows)}")
 
         new_message, _ = build_message(client_id, type_of_message, is_last, filtered_rows)
         # Naza: Aca se trimmea el mensaje para la Q1
         if type_of_message == CSV_TYPES_REVERSE['transactions']:  # transactions CHECK!
             queue_filter_amount.send(new_message)
+            queue_categorizer_stores_semester.send(new_message)
         # Naza: Aca se trimmea el mensaje para la Q3
         if type_of_message == CSV_TYPES_REVERSE['transaction_items']:  # transactions CHECK!
-            queue_categorizer_stores_semester.send(new_message)
+            print(f"[worker] Received a transaction_items message, that should never happen!", flush=True)
     else:
         print(f"[worker] Whole Message filtered out by hour.")
 
