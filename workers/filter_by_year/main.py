@@ -48,7 +48,8 @@ def on_message_callback_transactions(message: bytes, hour_filter_queue, store_us
                 print(f"[transactions] Error parsing created_at: {created_at} ({e})", file=sys.stderr)
 
         
-        if new_rows!= []:
+        # Important to forward the last message even if no rows matched the filter
+        if new_rows or is_last: 
             # print(f"[transactions] Enviando mensaje con {len(new_rows)} rows")  # Less verbose
 
             new_message, _ = build_message(client_id, type_of_message, is_last, new_rows)
