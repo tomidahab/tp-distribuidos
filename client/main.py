@@ -46,7 +46,11 @@ def main(folder):
         logging.warning("No se encontraron archivos para enviar.")
         return
     
-    client.run(file_list)
+    if len(file_list) < 4:
+        logging.warning("No se encontraron todos los archivos necesarios para las consultas.")
+        client.run(file_list, None)
+    else:
+        client.run(file_list[:-1], file_list[3])
 
 if __name__ == "__main__":
     folder = os.path.join("data", "input") if len(sys.argv) < 2 else sys.argv[1]

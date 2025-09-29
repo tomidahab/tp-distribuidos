@@ -23,15 +23,21 @@ RESULT_Q2_FILE = os.path.join(OUTPUT_DIR, 'result_q2.csv')
 RESULT_Q3_QUEUE = os.environ.get('RESULT_Q3_QUEUE', 'query3_result_receiver_queue')
 RESULT_Q3_FILE = os.path.join(OUTPUT_DIR, 'result_q3.csv')
 
+QUERIES_TO_COMPLETE = 1
+
 class Gateway:
     def __init__(self):
         self.client_skt = None
+        self.cond = threading.Condition()
+        self.queries_done = 0
         self.stop_by_sigterm = False
         signal.signal(signal.SIGTERM, self._sigterm_handler)
         signal.signal(signal.SIGINT, self._sigterm_handler)
 
     def _sigterm_handler(self, signum, _):
         self.stop_by_sigterm = True
+        with self.cond:
+            self.cond.notify_all()
         if self.client_skt:
             self.skt.close()
             self.skt = None
@@ -77,7 +83,7 @@ class Gateway:
 
         def on_message_callback(message: bytes):
             # Write message to result_q1.csv (append mode)
-            logging.info(f"[{result_queue}] Mensaje recibido en cola: {message}")
+            logging.info(f"[{result_queue}] Mensaje recibido en cola: {result_queue}")
             parsed_message = parse_message(message)
             rows = parsed_message['rows']
             with open(result_file, 'a+') as f:
@@ -89,10 +95,15 @@ class Gateway:
             logging.info(f"[{result_queue}] Mensaje guardado en {result_file}")
 
             if parsed_message["is_last"]:
-                logging.info(f"[{result_queue}] Mensaje final recibido, enviando respuesta al cliente.")
-                self.send_response_from_file(parsed_message['csv_type'], result_file)
-                os.remove(result_file)
-                logging.info(f"[{result_queue}] Respuesta enviada, persistencia eliminada.")
+                with self.cond:
+                    self.queries_done += 1
+                    self.cond.notify_all()
+                    logging.info(f"[{result_queue}] Query completada. Total queries done: {self.queries_done}")
+
+                # logging.info(f"[{result_queue}] Mensaje final recibido, enviando respuesta al cliente.")
+                # self.send_response_from_file(parsed_message['csv_type'], result_file)
+                # os.remove(result_file)
+                # logging.info(f"[{result_queue}] Respuesta enviada, persistencia eliminada.")
 
         try:
             queue.start_consuming(on_message_callback)
@@ -126,14 +137,52 @@ class Gateway:
                         if file_code == 1:
                             logging.info(f"[GATEWAY] Receiving chunk for file {filename}, total received: {received}/{filesize} bytes, len: {len(chunk)}")
                         if len(chunk) != 0:
-                            handle_and_forward_chunk(0, file_code, 1 if last_file else 0, chunk)
+                            handle_and_forward_chunk(0, file_code, 1 if received >= filesize and last_file else 0, chunk)
     
                 logging.info(f"Archivo recibido: {filename} ({filesize} bytes)")
                 if last_file and last_dataset:
                     break
     
+            # All files sent, now wait for queries to finish
+            with self.cond:
+                while self.queries_done < QUERIES_TO_COMPLETE and not self.stop_by_sigterm:
+                    self.cond.wait()
+                # Reset for next client
+                self.queries_done = 0
+    
+            # All queries done, now send results from files
+            if self.stop_by_sigterm:
+                return
+
+            self.send_file_result(RESULT_Q1_FILE)
+            os.remove(RESULT_Q1_FILE)
+            # self.send_file_result(RESULT_Q2_FILE)
+            # os.remove(RESULT_Q2_FILE)
+            # self.send_file_result(RESULT_Q3_FILE)
+            # os.remove(RESULT_Q3_FILE)
+
+            # self.send_response_from_file(1, RESULT_Q1_FILE)
+            # self.send_response_from_file(1, RESULT_Q2_FILE)
+            # self.send_response_from_file(1, RESULT_Q3_FILE)
+
+            logging.info(f"Respuesta enviada, persistencia eliminada.")
+    
         except Exception as e:
             logging.error(f"Error manejando cliente {addr}: {e}")
+            
+    def send_file_result(self, file):
+        with open(file, 'r') as f:
+            lines_batch = []
+            for line in f:
+                lines_batch.append(line)
+                if len(lines_batch) == 10:
+                    send_lines_batch(self.client_skt, 1, lines_batch, False)
+                    # logging.info(f"Enviado resultado parcial de {len(lines_batch)} líneas al cliente.")
+                    lines_batch = []
+                if self.stop_by_sigterm:
+                    return
+            send_lines_batch(self.client_skt,1, lines_batch, True)
+            logging.info(f"Envio completado al cliente.")
 
     def run(self):
         # Start result queue listener thread
