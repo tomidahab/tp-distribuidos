@@ -1,7 +1,8 @@
 import os
 import sys
 from collections import defaultdict, Counter
-from common.protocol import protocol, build_message, parse_message
+import time
+from common.protocol import build_message, parse_message, row_to_dict
 from common.middleware import MessageMiddlewareExchange, MessageMiddlewareDisconnectedError, MessageMiddlewareMessageError, MessageMiddlewareQueue
 
 RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq_server')
@@ -14,8 +15,11 @@ AMOUNT_OF_WORKERS = int(os.environ.get('AMOUNT_OF_WORKERS', 1))
 
 def listen_for_transactions():
     store_user_counter = defaultdict(Counter)
+    end_received = False
 
     topic_routing_key = f"store.{WORKER_INDEX}"
+    print(f"[categorizer_q4] Worker index: {WORKER_INDEX}, routing key: {topic_routing_key}")
+    # Bind to both topic and fanout exchanges
     queue = MessageMiddlewareExchange(
         host=RABBITMQ_HOST,
         exchange_name=TOPIC_EXCHANGE,
@@ -23,7 +27,7 @@ def listen_for_transactions():
         queue_name=RECEIVER_QUEUE,
         routing_keys=[topic_routing_key]
     )
-    _fanout_queue = MessageMiddlewareExchange(
+    fanout_queue = MessageMiddlewareExchange(
         host=RABBITMQ_HOST,
         exchange_name=FANOUT_EXCHANGE,
         exchange_type='fanout',
@@ -33,18 +37,21 @@ def listen_for_transactions():
     print(f"[categorizer_q4] Listening for transactions on queue: {RECEIVER_QUEUE} (topic key: {topic_routing_key})")
 
     def on_message_callback(message: bytes):
-        message_decoded = protocol.decode_transaction_message(message)
-        store_id = message_decoded.get('store_id')
-        user_id = message_decoded.get('user_id')
-        msg_type = message_decoded.get('type')
-
-        if msg_type == 'end':
+        nonlocal end_received
+        parsed_message = parse_message(message)
+        type_of_message = parsed_message['csv_type']
+        is_last = parsed_message['is_last']
+        print(f"[categorizer_q4] Received message with {len(parsed_message['rows'])} rows, is_last={is_last}")
+        for row in parsed_message['rows']:
+            dic_fields_row = row_to_dict(row, type_of_message)
+            store_id = dic_fields_row.get('store_id')
+            user_id = dic_fields_row.get('user_id')
+            if None not in (store_id, user_id):
+                store_user_counter[store_id][user_id] += 1
+        if is_last and not end_received:
+            end_received = True
             print("[categorizer_q4] Received end message, stopping transaction collection.")
             queue.stop_consuming()
-            return
-
-        if None not in (store_id, user_id):
-            store_user_counter[store_id][user_id] += 1
 
     try:
         queue.start_consuming(on_message_callback)
@@ -54,10 +61,11 @@ def listen_for_transactions():
         print("[categorizer_q4] Message error in middleware.", file=sys.stderr)
     finally:
         queue.close()
+        fanout_queue.close()
     return store_user_counter
 
 def get_top_users_per_store(store_user_counter, top_n=3):
-    # Devuelve {store_id: [(user_id, purchase_count), ...]}
+    # Returns {store_id: [(user_id, purchase_count), ...]}
     top_users = {}
     for store_id, user_counter in store_user_counter.items():
         top_users[store_id] = user_counter.most_common(top_n)
@@ -65,23 +73,28 @@ def get_top_users_per_store(store_user_counter, top_n=3):
 
 def send_results_to_birthday_dict(top_users):
     queue = MessageMiddlewareQueue(RABBITMQ_HOST, BIRTHDAY_DICT_QUEUE)
-
-    rows = []
+    # Send one message per store with its top 3 users
     for store_id, users in top_users.items():
+        rows = []
         for user_id, count in users:
             rows.append(f"{store_id},{user_id},{count}")
-    message, _ = build_message(0, 4, 1, rows)  
-    queue.send(message)
-    print(f"[categorizer_q4] Sent result to Birthday_Dictionary: {rows}")
+        # is_last=0 for regular messages
+        message, _ = build_message(0, 4, 0, rows)
+        queue.send(message)
+        print(f"[categorizer_q4] Sent top users for store {store_id} to Birthday_Dictionary: {rows}")
+    # After all stores, send the end message
+    end_message, _ = build_message(0, 4, 1, [])
+    queue.send(end_message)
+    print("[categorizer_q4] Sent END message to Birthday_Dictionary.")
     queue.close()
 
 def main():
+    time.sleep(30)
     store_user_counter = listen_for_transactions()
     print("[categorizer_q4] Final store-user stats:")
-    for store_id, user_counter in store_user_counter.items():
-        print(f"Store: {store_id}, Users: {user_counter}")
     top_users = get_top_users_per_store(store_user_counter, top_n=3)
     send_results_to_birthday_dict(top_users)
+    print("[categorizer_q4] Worker completed successfully.")
 
 if __name__ == "__main__":
     main()

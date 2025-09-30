@@ -14,7 +14,6 @@ QUEUE_T_ITEMS = os.environ.get('QUEUE_T_ITEMS', 'filter_by_year_transaction_item
 QUEUE_T = os.environ.get('QUEUE_T', 'filter_by_year_transactions_queue')
 HOUR_FILTER_QUEUE = os.environ.get('HOUR_FILTER_QUEUE', 'filter_by_hour_queue')
 ITEM_CATEGORIZER_QUEUE = os.environ.get('ITEM_CATEGORIZER_QUEUE', 'categorizer_q2_receiver_queue')
-STORE_USER_CATEGORIZER_QUEUE = os.environ.get('STORE_USER_CATEGORIZER_QUEUE', 'store_user_categorizer_queue')
 FILTER_YEARS = [
     int(y.strip()) for y in os.environ.get('FILTER_YEAR', '2024,2025').split(',')
 ]
@@ -48,12 +47,19 @@ def on_message_callback_transactions(message: bytes, hour_filter_queue, categori
         if new_rows or is_last: 
             new_message, _ = build_message(client_id, type_of_message, is_last, new_rows)
             hour_filter_queue.send(new_message)
+
+            batches = defaultdict(list)
             for row in new_rows:
                 dic_fields_row = row_to_dict(row, type_of_message)
                 store_id = int(dic_fields_row['store_id'])
                 routing_key = f"store.{store_id % CATEGORIZER_Q4_WORKERS}"
-                q4_message, _ = build_message(client_id, type_of_message, 0, [row])
-                categorizer_q4_topic_exchange.send(q4_message, routing_key=routing_key)
+                batches[routing_key].append(row)
+
+            for routing_key, batch_rows in batches.items():
+                if batch_rows:
+                    q4_message, _ = build_message(client_id, type_of_message, 0, batch_rows)
+                    print(f"[filter_by_year] Sending {len(batch_rows)} rows to categorizer_q4 with routing key {routing_key}")
+                    categorizer_q4_topic_exchange.send(q4_message, routing_key=routing_key)
 
         if is_last:
             end_message, _ = build_message(client_id, type_of_message, 1, [])
@@ -154,7 +160,6 @@ def main():
         )
         print(f"[filter_by_year] Connected to item categorizer fanout exchange: {FANOUT_EXCHANGE}")
         
-        global categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange
         categorizer_q4_topic_exchange = MessageMiddlewareExchange(
             host=RABBITMQ_HOST,
             exchange_name=CATEGORIZER_Q4_TOPIC_EXCHANGE,

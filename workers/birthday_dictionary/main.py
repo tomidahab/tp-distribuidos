@@ -1,6 +1,7 @@
 import os
 import sys
 from collections import defaultdict
+import time
 from common.protocol import parse_message, build_message
 from common.middleware import MessageMiddlewareQueue, MessageMiddlewareDisconnectedError, MessageMiddlewareMessageError
 
@@ -24,6 +25,7 @@ def listen_for_top_users():
         nonlocal end_messages_received
         parsed_message = parse_message(message)
         top_users = []
+        print(f"[birthday_dictionary] Received message with {len(parsed_message['rows'])} rows, is_last={parsed_message['is_last']}")
         for row in parsed_message['rows']:
             parts = row.split(',')
             if len(parts) == 3:
@@ -31,6 +33,7 @@ def listen_for_top_users():
                 top_users.append({'store_id': store_id, 'user_id': user_id, 'count': int(count)})
                 user_ids.add(user_id)
         messages.append({'top_users': top_users, 'is_last': parsed_message['is_last']})
+        print(f"[birthday_dictionary] message processed, total messages: {len(messages)}, unique user_ids: {len(user_ids)}")
         if parsed_message['is_last']:
             end_messages_received += 1
             print(f"[birthday_dictionary] Received end message {end_messages_received}/{CATEGORIZER_Q4_WORKERS} from categorizer_q4 workers.")
@@ -113,6 +116,7 @@ def send_enriched_messages_to_gateway(enriched_messages):
     queue.close()
 
 def main():
+    time.sleep(30)
     messages, user_ids = listen_for_top_users()
     if not user_ids:
         print("[birthday_dictionary] No user IDs received, exiting.")
