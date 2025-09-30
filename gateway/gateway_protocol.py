@@ -13,6 +13,7 @@ CATEGORIZER_QUERY2_ITEMS_QUEUE = 'categorizer_q2_items_queue'
 CATEGORIZER_QUERY2_TRANSACTIONS_QUEUE = 'categorizer_q2_receiver_queue'
 CATEGORIZER_Q2_ITEMS_FANOUT_EXCHANGE = 'categorizer_q2_items_fanout_exchange'
 
+BIRTH_DIC_DATA_RESPONSES_QUEUE = os.environ.get('Q4_DATA_RESPONSES_QUEUE', 'gateway_client_data_queue')
 
 # Instancias de las colas (inicialización perezosa)
 filter_by_year_t_queue = None
@@ -20,6 +21,8 @@ filter_by_year_t_items_queue = None
 categorizer_query2_items_queue = None
 categorizer_query2_transactions_queue = None
 categorizer_query2_items_exchange = None  # Add this global variable
+
+birth_dic_data_responses_queue = None
 
 
 def recv_lines_batch(skt: socket):
@@ -104,6 +107,20 @@ def handle_and_forward_chunk(client_id: int, csv_type: int, is_last: int, chunk:
                     time.sleep(RETRY_DELAY)
             else:
                 print(f"[gateway_protocol] Failed to connect to menu_items fanout exchange after {MAX_RETRIES} retries", file=sys.stderr)
+                return -1
+        elif csv_type == CSV_TYPES_REVERSE["users"]:  # users
+            for attempt in range(MAX_RETRIES):
+                try:
+                    if birth_dic_data_responses_queue is None:
+                        birth_dic_data_responses_queue = MessageMiddlewareQueue(RABBITMQ_HOST, BIRTH_DIC_DATA_RESPONSES_QUEUE)
+                    birth_dic_data_responses_queue.send(message)
+                    break
+                except Exception as e:
+                    print(f"[gateway_protocol] Retry {attempt+1}/{MAX_RETRIES} for users queue: {e}", file=sys.stderr)
+                    birth_dic_data_responses_queue = None
+                    time.sleep(RETRY_DELAY)
+            else:
+                print(f"[gateway_protocol] Failed to connect to users queue after {MAX_RETRIES} retries", file=sys.stderr)
                 return -1
         # Otros tipos no se envían por ahora
     except Exception as e:

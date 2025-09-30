@@ -5,6 +5,7 @@ from socket import AF_INET, SOCK_STREAM, socket
 import threading
 from time import sleep
 
+from common import response_types
 from common.middleware import MessageMiddlewareQueue
 from common.protocol import parse_message, unpack_response_message
 import common.config as config
@@ -22,6 +23,10 @@ RESULT_Q2_FILE = os.path.join(OUTPUT_DIR, 'result_q2.csv')
 
 RESULT_Q3_QUEUE = os.environ.get('RESULT_Q3_QUEUE', 'query3_result_receiver_queue')
 RESULT_Q3_FILE = os.path.join(OUTPUT_DIR, 'result_q3.csv')
+
+Q4_DATA_REQUESTS_QUEUE = os.environ.get('Q4_DATA_REQUESTS_QUEUE', 'birthday_dictionary_client_request_queue')
+RESULT_Q4_QUEUE = os.environ.get('RESULT_Q4_QUEUE', 'query4_answer_queue') # Modify to match others
+RESULT_Q4_FILE = os.path.join(OUTPUT_DIR, 'result_q4.csv')
 
 QUERY_3_TOTAL_WORKERS = int(os.environ.get('QUERY_3_TOTAL_WORKERS', 2))
 
@@ -86,6 +91,22 @@ class Gateway:
             self.cond.notify_all()
             logging.info(f"[{result_queue}] Query completada. Total queries done: {self.queries_done}")
 
+    def listen_for_q4_requests(self):
+        sleep(config.MIDDLEWARE_UP_TIME)  # Esperar a que RabbitMQ esté listo
+        queue = MessageMiddlewareQueue(os.environ.get('RABBITMQ_HOST', 'rabbitmq_server'), Q4_DATA_REQUESTS_QUEUE)
+
+        def on_message_callback(message: bytes):
+            logging.info(f"[{Q4_DATA_REQUESTS_QUEUE}] Mensaje recibido en cola: {message}")
+            # This message could be anything, just request de data to the connected client
+            send_response(self.client_skt, response_types.Q4_STEP, "")
+            self.receive_datasets()
+            logging.info(f"[{Q4_DATA_REQUESTS_QUEUE}] Datos recibidos y reenviados al cliente.")
+
+        try:
+            queue.start_consuming(on_message_callback)
+        except Exception as e:
+            logging.error(f"[{Q4_DATA_REQUESTS_QUEUE}] Error consumiendo mensajes: {e}")
+    
     def listen_queue_result(self, result_queue, result_file):
         sleep(config.MIDDLEWARE_UP_TIME)  # Esperar a que RabbitMQ esté listo
         logging.info(f"[{result_queue}] Waiting for messages in {result_queue}")
@@ -121,40 +142,42 @@ class Gateway:
         except Exception as e:
             logging.error(f"[{result_queue}] Error consumiendo mensajes: {e}")
 
+    def receive_datasets(self):
+        while True:
+            # NOTE: `recv` is unreliable, and `recv_all` guarantees that we will either receive all the bytes
+            # or raise a ConnectionError. Therefore, we should not treat it as a function that can return None.
+            # To know when to stop receiving file data, we need explicit flags.
+            
+            filename = recv_h_str(self.client_skt)
+            filesize = recv_long(self.client_skt)
+            last_file = recv_bool(self.client_skt)
+            last_dataset = recv_bool(self.client_skt)
+            filepath = os.path.join(OUTPUT_DIR, filename)
+
+            received = 0
+            with open(filepath, "wb") as f:
+                file_code = filename_to_type(filename)
+                while received < filesize:
+                    chunk = recv_h_bytes(self.client_skt)
+                    if self.stop_by_sigterm:
+                        return
+                    f.write(chunk)
+                    received += len(chunk)  
+                    if file_code == 1:
+                        logging.info(f"[GATEWAY] Receiving chunk for file {filename}, total received: {received}/{filesize} bytes, len: {len(chunk)}")
+                    if len(chunk) != 0:
+                        handle_and_forward_chunk(0, file_code, 1 if received >= filesize and last_file else 0, chunk)
+
+            logging.info(f"Archivo recibido: {filename} ({filesize} bytes)")
+            if last_file and last_dataset:
+                break
+
     def handle_client(self, addr):
         logging.info(f"Conexión recibida de {addr}")
         self.clear_temp_files()
         try:
-            while True:
-                # NOTE: `recv` is unreliable, and `recv_all` guarantees that we will either receive all the bytes
-                # or raise a ConnectionError. Therefore, we should not treat it as a function that can return None.
-                # To know when to stop receiving file data, we need explicit flags.
-                
-                filename = recv_h_str(self.client_skt)
-                filesize = recv_long(self.client_skt)
-                last_file = recv_bool(self.client_skt)
-                last_dataset = recv_bool(self.client_skt)
-
-                filepath = os.path.join(OUTPUT_DIR, filename)
-    
-                received = 0
-                with open(filepath, "wb") as f:
-                    file_code = filename_to_type(filename)
-                    while received < filesize:
-                        chunk = recv_h_bytes(self.client_skt)
-                        if self.stop_by_sigterm:
-                            return
-                        f.write(chunk)
-                        received += len(chunk)  
-                        if file_code == 1:
-                            logging.info(f"[GATEWAY] Receiving chunk for file {filename}, total received: {received}/{filesize} bytes, len: {len(chunk)}")
-                        if len(chunk) != 0:
-                            handle_and_forward_chunk(0, file_code, 1 if received >= filesize and last_file else 0, chunk)
-    
-                logging.info(f"Archivo recibido: {filename} ({filesize} bytes)")
-                if last_file and last_dataset:
-                    break
-    
+            self.receive_datasets()
+            logging.info("Todos los archivos fueron recibidos correctamente.")    
             # All files sent, now wait for queries to finish
             with self.cond:
                 while self.queries_done < QUERIES_TO_COMPLETE and not self.stop_by_sigterm:
@@ -170,11 +193,7 @@ class Gateway:
             self.send_file_result(RESULT_Q2_FILE)
             self.send_file_result(RESULT_Q3_FILE)
 
-            #self.clear_temp_files()
-            # self.send_response_from_file(1, RESULT_Q1_FILE)
-            # self.send_response_from_file(1, RESULT_Q2_FILE)
-            # self.send_response_from_file(1, RESULT_Q3_FILE)
-
+            self.clear_temp_files()
             logging.info(f"Respuesta enviada, persistencia eliminada.")
     
         except Exception as e:
@@ -214,6 +233,11 @@ class Gateway:
         q3_result_thread = threading.Thread(target=self.listen_queue_result, args=(RESULT_Q3_QUEUE, RESULT_Q3_FILE), daemon=True)
         q3_result_thread.start()
         
+        q4_request_thread = threading.Thread(target=self.listen_for_q4_requests, args=(), daemon=True)
+        q4_request_thread.start()
+        q4_result_thread = threading.Thread(target=self.listen_queue_result, args=(RESULT_Q4_QUEUE, RESULT_Q4_FILE), daemon=True)
+        q4_result_thread.start()
+
         # Creates the directory if it doesn't exist
         os.makedirs(OUTPUT_DIR, exist_ok=True)
 

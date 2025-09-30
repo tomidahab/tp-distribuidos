@@ -3,7 +3,7 @@ import sys
 from collections import defaultdict
 import time
 from datetime import datetime
-
+from common import config
 # Debug startup
 print("[categorizer_q3] STARTING UP - Basic imports done", flush=True)
 
@@ -147,7 +147,7 @@ def main():
     print("[categorizer_q3] MAIN FUNCTION STARTED", flush=True)
     try:
         print("[categorizer_q3] Waiting for RabbitMQ to be ready...", flush=True)
-        time.sleep(30)  # Wait for RabbitMQ to be ready
+        time.sleep(config.MIDDLEWARE_UP_TIME)  # Wait for RabbitMQ to be ready
         print("[categorizer_q3] Starting worker...", flush=True)
         print("[categorizer_q3] About to call listen_for_transactions()...", flush=True)
         
@@ -158,10 +158,10 @@ def main():
             year, semester, store_id = key
             print(f"Year: {year}, Semester: {semester}, Store: {store_id}, Total Payment: {total}")
             
-        if not semester_store_stats:
-            print("[categorizer_q3] No transaction data received, exiting.")
-            return
-            
+        # if not semester_store_stats:
+        #     print("[categorizer_q3] No transaction data received, exiting.")
+        #     return
+        # Even if empty, we send results to notify worker completion!
         send_results_to_gateway(semester_store_stats)
         print("[categorizer_q3] Worker completed successfully.", flush=True)
         
