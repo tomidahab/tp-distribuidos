@@ -218,3 +218,4 @@ services:
     depends_on:
       - rabbitmq_server
       - gateway
+

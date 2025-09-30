@@ -93,7 +93,7 @@ class Client:
             # Wait for results
             self.recv_query_result("Q1")
             # self.recv_query_result("Q2")
-            # self.recv_query_result("Q3")
+            self.recv_query_result("Q3")
 
             if q4_dataset:
                 # self.recv_query_result("Q4")

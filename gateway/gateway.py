@@ -23,7 +23,7 @@ RESULT_Q2_FILE = os.path.join(OUTPUT_DIR, 'result_q2.csv')
 RESULT_Q3_QUEUE = os.environ.get('RESULT_Q3_QUEUE', 'query3_result_receiver_queue')
 RESULT_Q3_FILE = os.path.join(OUTPUT_DIR, 'result_q3.csv')
 
-QUERIES_TO_COMPLETE = 1
+QUERIES_TO_COMPLETE = 2
 
 class Gateway:
     def __init__(self):
@@ -80,6 +80,7 @@ class Gateway:
 
     def listen_queue_result(self, result_queue, result_file):
         sleep(config.MIDDLEWARE_UP_TIME)  # Esperar a que RabbitMQ esté listo
+        logging.info(f"[{result_queue}] Waiting for messages in")
         queue = MessageMiddlewareQueue(os.environ.get('RABBITMQ_HOST', 'rabbitmq_server'), result_queue)
 
         def on_message_callback(message: bytes):
@@ -149,8 +150,8 @@ class Gateway:
                 return
 
             self.send_file_result(RESULT_Q1_FILE)
-            # self.send_file_result(RESULT_Q2_FILE)
-            # self.send_file_result(RESULT_Q3_FILE)
+            #self.send_file_result(RESULT_Q2_FILE)
+            self.send_file_result(RESULT_Q3_FILE)
 
             self.clear_temp_files()
             # self.send_response_from_file(1, RESULT_Q1_FILE)
