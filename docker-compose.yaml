@@ -8,6 +8,38 @@ services:
     container_name: gateway
     ports:
       - "5000:5000"
+    depends_on:
+      - rabbitmq_server
+    volumes:
+      - ./data/received:/app/data/received
+
+  categorizer_q3_worker_1:
+    build:
+      context: .
+      dockerfile: workers/categorizer_q3/Dockerfile
+    container_name: categorizer_q3_worker_1
+    environment:
+      - RABBITMQ_HOST=rabbitmq_server
+      - RECEIVER_EXCHANGE=categorizer_q3_exchange
+      - WORKER_INDEX=0
+      - GATEWAY_QUEUE=query3_result_receiver_queue
+    depends_on:
+      - rabbitmq_server
+    volumes:
+      - ./data/received:/app/data/received
+
+  categorizer_q3_worker_2:
+    build:
+      context: .
+      dockerfile: workers/categorizer_q3/Dockerfile
+    container_name: categorizer_q3_worker_2
+    environment:
+      - RABBITMQ_HOST=rabbitmq_server
+      - RECEIVER_EXCHANGE=categorizer_q3_exchange
+      - WORKER_INDEX=1
+      - GATEWAY_QUEUE=query3_result_receiver_queue
+    depends_on:
+      - rabbitmq_server
     volumes:
       - ./data/received:/app/data/received
 
@@ -60,9 +92,11 @@ services:
       - START_HOUR=6
       - END_HOUR=11
       - QUEUE_FILTER_AMOUNT=filter_by_amount_queue
-      - QUEUE_CATEGORIZER_STORES_SEMESTER=store_semester_categorizer_queue
+      - CATEGORIZER_Q3_EXCHANGE=categorizer_q3_exchange
     depends_on:
       - rabbitmq_server
+    volumes:
+      - ./data/received:/app/data/received
 
   filter_by_amount_worker:
     build:
