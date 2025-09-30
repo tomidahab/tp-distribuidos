@@ -12,9 +12,9 @@ RECEIVER_QUEUE = os.environ.get('RECEIVER_QUEUE', 'filter_by_hour_queue')
 START_HOUR = int(os.environ.get('START_HOUR', '6'))
 END_HOUR = int(os.environ.get('END_HOUR', '11'))
 FILTER_BY_AMOUNT_EXCHANGE = os.environ.get('FILTER_BY_AMOUNT_EXCHANGE', 'filter_by_amount_exchange')
-FILTER_BY_AMOUNT_FANOUT_EXCHANGE = f"{FILTER_BY_AMOUNT_EXCHANGE}_fanout"
 CATEGORIZER_Q3_EXCHANGE = os.environ.get('CATEGORIZER_Q3_EXCHANGE', 'categorizer_q3_exchange')
 CATEGORIZER_Q3_FANOUT_EXCHANGE = f"{CATEGORIZER_Q3_EXCHANGE}_fanout"
+NUMBER_OF_AMOUNT_WORKERS = int(os.environ.get('NUMBER_OF_AMOUNT_WORKERS', '3'))
 
 SEMESTER_KEYS_FOR_FANOUT = ['semester.2023-1', 'semester.2024-1', 'semester.2024-2','semester.2025-1']
 
@@ -45,7 +45,7 @@ def filter_message_by_hour(parsed_message, start_hour: int, end_hour: int) -> li
         print(f"[filter] Error parsing message: {e}", file=sys.stderr)
         return []
 
-def on_message_callback(message: bytes, filter_by_amount_exchange, filter_by_amount_fanout_exchange, categorizer_q3_topic_exchange, categorizer_q3_fanout_exchange):
+def on_message_callback(message: bytes, filter_by_amount_exchange, categorizer_q3_topic_exchange, categorizer_q3_fanout_exchange):
     print("[worker] Received a message!", flush=True)
     parsed_message = parse_message(message)
     type_of_message = parsed_message['csv_type']  
@@ -63,7 +63,7 @@ def on_message_callback(message: bytes, filter_by_amount_exchange, filter_by_amo
                 # Group rows by worker to send in batches instead of one by one
                 rows_by_worker = defaultdict(list)
                 for i, row in enumerate(filtered_rows):
-                    worker_index = i % 3  # Simple round robin by row index
+                    worker_index = i % NUMBER_OF_AMOUNT_WORKERS  # Simple round robin by row index
                     routing_key = f"transaction.{worker_index}"
                     rows_by_worker[routing_key].append(row)
                 
@@ -107,8 +107,10 @@ def on_message_callback(message: bytes, filter_by_amount_exchange, filter_by_amo
             try:
                 # Send END to filter_by_amount via fanout (to all workers)
                 end_message, _ = build_message(client_id, type_of_message, 1, [])
-                filter_by_amount_fanout_exchange.send(end_message)
-                print("[worker] Sent END message to filter_by_amount via fanout exchange", flush=True)
+                for i in range(NUMBER_OF_AMOUNT_WORKERS):
+                    routing_key = f"transaction.{i}"
+                    filter_by_amount_exchange.send(end_message, routing_key=routing_key)
+                    print(f"[worker] Sent END message to filter_by_amount worker {i} via topic exchange", flush=True)
                 
                 # Send END to categorizer_q3 for each semester
                 for semester_key in SEMESTER_KEYS_FOR_FANOUT:
@@ -123,9 +125,9 @@ def on_message_callback(message: bytes, filter_by_amount_exchange, filter_by_amo
     else:
         print(f"[worker] Whole Message filtered out by hour.")
 
-def make_on_message_callback(filter_by_amount_exchange, filter_by_amount_fanout_exchange, categorizer_q3_topic_exchange, categorizer_q3_fanout_exchange):
+def make_on_message_callback(filter_by_amount_exchange, categorizer_q3_topic_exchange, categorizer_q3_fanout_exchange):
     def wrapper(message: bytes):
-        on_message_callback(message, filter_by_amount_exchange, filter_by_amount_fanout_exchange, categorizer_q3_topic_exchange, categorizer_q3_fanout_exchange)
+        on_message_callback(message, filter_by_amount_exchange, categorizer_q3_topic_exchange, categorizer_q3_fanout_exchange)
     return wrapper
 
 def main():
@@ -156,15 +158,6 @@ def main():
         )
         print(f"[filter_by_hour] Connected to filter_by_amount topic exchange: {FILTER_BY_AMOUNT_EXCHANGE}")
         
-        print("[filter_by_hour] Creating filter_by_amount fanout exchange connection...")
-        filter_by_amount_fanout_exchange = MessageMiddlewareExchange(
-            RABBITMQ_HOST,
-            exchange_name=FILTER_BY_AMOUNT_FANOUT_EXCHANGE,
-            exchange_type='fanout',
-            queue_name=""  # Empty queue since we're only sending, not consuming
-        )
-        print(f"[filter_by_hour] Connected to filter_by_amount fanout exchange: {FILTER_BY_AMOUNT_FANOUT_EXCHANGE}")
-        
         print("[filter_by_hour] Creating categorizer_q3 topic exchange connection...")
         # Connect to categorizer_q3 topic exchange
         categorizer_q3_topic_exchange = MessageMiddlewareExchange(
@@ -186,7 +179,7 @@ def main():
         print(f"[filter_by_hour] Connected to categorizer_q3 fanout exchange: {CATEGORIZER_Q3_FANOUT_EXCHANGE}")
         
         print("[filter_by_hour] Creating callback and starting to consume...")
-        callback = make_on_message_callback(filter_by_amount_exchange, filter_by_amount_fanout_exchange, categorizer_q3_topic_exchange, categorizer_q3_fanout_exchange)
+        callback = make_on_message_callback(filter_by_amount_exchange, categorizer_q3_topic_exchange, categorizer_q3_fanout_exchange)
         print("[filter_by_hour] About to start consuming messages...")
         queue.start_consuming(callback)
     except MessageMiddlewareDisconnectedError:
