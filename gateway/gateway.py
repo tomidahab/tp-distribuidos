@@ -23,6 +23,8 @@ RESULT_Q2_FILE = os.path.join(OUTPUT_DIR, 'result_q2.csv')
 RESULT_Q3_QUEUE = os.environ.get('RESULT_Q3_QUEUE', 'query3_result_receiver_queue')
 RESULT_Q3_FILE = os.path.join(OUTPUT_DIR, 'result_q3.csv')
 
+QUERY_3_TOTAL_WORKERS = int(os.environ.get('QUERY_3_TOTAL_WORKERS', 2))
+
 QUERIES_TO_COMPLETE = 2
 
 class Gateway:
@@ -65,7 +67,7 @@ class Gateway:
             logging.error(f"[{result_queue}] Error consumiendo mensajes: {e}")
 
     def save_temp_results(self, result_file, iterable):
-        with open(result_file, 'a+') as f:
+        with open(result_file, 'a') as f:  # Changed from 'w+' to 'a' to append instead of overwrite
             for line in iterable:
                 if self.stop_by_sigterm:
                     return
@@ -80,18 +82,27 @@ class Gateway:
 
     def listen_queue_result(self, result_queue, result_file):
         sleep(config.MIDDLEWARE_UP_TIME)  # Esperar a que RabbitMQ esté listo
-        logging.info(f"[{result_queue}] Waiting for messages in")
+        logging.info(f"[{result_queue}] Waiting for messages in {result_queue}")
         queue = MessageMiddlewareQueue(os.environ.get('RABBITMQ_HOST', 'rabbitmq_server'), result_queue)
-
+        number_of_messages_received = 0
         def on_message_callback(message: bytes):
+            nonlocal number_of_messages_received
+            number_of_messages_received += 1
             # Write message to result_q1.csv (append mode)
             logging.info(f"[{result_queue}] Mensaje recibido en cola: {result_queue}")
             parsed_message = parse_message(message)
             rows = parsed_message['rows']
+
+            if result_queue == RESULT_Q3_QUEUE:
+                logging.info(f"[{result_queue}] Received message {number_of_messages_received} with {len(rows)} rows, is_last={parsed_message['is_last']}")
+
             self.save_temp_results(result_file, rows)
             logging.info(f"[{result_queue}] Mensaje guardado en {result_file}")
 
-            if parsed_message["is_last"]:
+            if parsed_message['is_last'] and result_queue == RESULT_Q1_QUEUE:
+                self.mark_query_completed(result_queue)
+
+            if parsed_message["is_last"] and number_of_messages_received == QUERY_3_TOTAL_WORKERS and result_queue == RESULT_Q3_QUEUE:
                 self.mark_query_completed(result_queue)
 
                 # logging.info(f"[{result_queue}] Mensaje final recibido, enviando respuesta al cliente.")
@@ -153,7 +164,7 @@ class Gateway:
             #self.send_file_result(RESULT_Q2_FILE)
             self.send_file_result(RESULT_Q3_FILE)
 
-            self.clear_temp_files()
+            #self.clear_temp_files()
             # self.send_response_from_file(1, RESULT_Q1_FILE)
             # self.send_response_from_file(1, RESULT_Q2_FILE)
             # self.send_response_from_file(1, RESULT_Q3_FILE)

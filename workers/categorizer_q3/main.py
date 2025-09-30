@@ -11,7 +11,7 @@ print("[categorizer_q3] STARTING UP - Basic imports done", flush=True)
 try:
     print("[categorizer_q3] Attempting to import common modules...", flush=True)
     from common.protocol import parse_message, row_to_dict, build_message, CSV_TYPES_REVERSE,create_response_message
-    from common.middleware import MessageMiddlewareQueue, MessageMiddlewareDisconnectedError, MessageMiddlewareMessageError
+    from common.middleware import MessageMiddlewareQueue, MessageMiddlewareExchange, MessageMiddlewareDisconnectedError, MessageMiddlewareMessageError
     print("[categorizer_q3] Successfully imported common modules", flush=True)
 except ImportError as e:
     print(f"[categorizer_q3] IMPORT ERROR: {e}", flush=True)
@@ -21,8 +21,16 @@ except Exception as e:
     sys.exit(1)
 
 RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq_server')
-RECEIVER_QUEUE = os.environ.get('RECEIVER_QUEUE', 'store_semester_categorizer_queue')
+RECEIVER_EXCHANGE = os.environ.get('RECEIVER_EXCHANGE', 'categorizer_q3_exchange')
+FANOUT_EXCHANGE = f"{RECEIVER_EXCHANGE}_fanout"
+WORKER_INDEX = int(os.environ.get('WORKER_INDEX', '0'))
 GATEWAY_QUEUE = os.environ.get('GATEWAY_QUEUE', 'query3_result_receiver_queue')
+
+# Define semester mapping for worker distribution
+SEMESTER_MAPPING = {
+    0: ['semester.2023-2', 'semester.2024-2'],  # Worker 0: second semesters
+    1: ['semester.2024-1', 'semester.2025-1']   # Worker 1: first semesters
+}
 
 def get_semester(month):
     return 1 if 1 <= month <= 6 else 2
@@ -30,22 +38,55 @@ def get_semester(month):
 def listen_for_transactions():
     # Agregación: {(year, semester, store_id): total_payment}
     semester_store_stats = defaultdict(float)
+    
+    # Get routing keys for this worker
+    worker_routing_keys = SEMESTER_MAPPING.get(WORKER_INDEX, [])
+    if not worker_routing_keys:
+        print(f"[categorizer_q3] No routing keys for worker {WORKER_INDEX}", file=sys.stderr)
+        return semester_store_stats
+    
+    print(f"[categorizer_q3] Worker {WORKER_INDEX} will handle routing keys: {worker_routing_keys}", flush=True)
+    print(f"[categorizer_q3] About to create MessageMiddlewareExchange with exchange: {RECEIVER_EXCHANGE}", flush=True)
+    
     try:
-        queue = MessageMiddlewareQueue(RABBITMQ_HOST, RECEIVER_QUEUE)
+        print(f"[categorizer_q3] Creating MessageMiddlewareExchange...", flush=True)
+        topic_middleware = MessageMiddlewareExchange(
+            host=RABBITMQ_HOST, 
+            exchange_name=RECEIVER_EXCHANGE, 
+            exchange_type='topic',
+            queue_name=f"categorizer_q3_worker_{WORKER_INDEX}_queue",
+            routing_keys=worker_routing_keys
+        )
+        print(f"[categorizer_q3] Successfully created MessageMiddlewareExchange", flush=True)
+
+        # print(f"[categorizer_q3] Creating fanout MessageMiddlewareExchange for END messages using SAME queue...", flush=True)
+        # fanout_middleware = MessageMiddlewareExchange(
+        #     host=RABBITMQ_HOST, 
+        #     exchange_name=FANOUT_EXCHANGE, 
+        #     exchange_type='fanout',
+        #     queue_name=f"categorizer_q3_worker_{WORKER_INDEX}_queue",  # SAME queue as topic exchange
+        #     routing_keys=[]  # Fanout doesn't use routing keys
+        # )
+        # print(f"[categorizer_q3] Successfully created fanout MessageMiddlewareExchange", flush=True)
+
     except Exception as e:
         print(f"[categorizer_q3] Failed to connect to RabbitMQ: {e}", file=sys.stderr)
         return semester_store_stats
     
-    print(f"[categorizer_q3] Listening for transactions on queue: {RECEIVER_QUEUE}")
+    print(f"[categorizer_q3] Worker {WORKER_INDEX} listening for transactions on exchange: {RECEIVER_EXCHANGE} with routing keys: {worker_routing_keys}")
 
     def on_message_callback(message: bytes):
+        print(f"[categorizer_q3] Worker {WORKER_INDEX} received a message!", flush=True)
         try:
             parsed_message = parse_message(message)
             type_of_message = parsed_message['csv_type']  
             client_id = parsed_message['client_id']
             is_last = parsed_message['is_last']
             
+            print(f"[categorizer_q3] Message details - is_last: {is_last}, rows: {len(parsed_message['rows'])}", flush=True)
+
             for row in parsed_message['rows']:
+                print(f"[categorizer_q3] Processing row: {row}, is_last={is_last}", flush=True)
                 dic_fields_row = row_to_dict(row, type_of_message)
                 
                 # Extract transaction data
@@ -64,13 +105,14 @@ def listen_for_transactions():
                 
             if is_last:
                 print("[categorizer_q3] Received end message, stopping transaction collection.")
-                queue.stop_consuming()
+                topic_middleware.stop_consuming()
         except Exception as e:
             print(f"[categorizer_q3] Error processing transaction message: {e}", file=sys.stderr)
 
     try:
-        print("[categorizer_q3] Starting to consume messages...")
-        queue.start_consuming(on_message_callback)
+        print("[categorizer_q3] Starting to consume messages...", flush=True)
+        topic_middleware.start_consuming(on_message_callback)
+        print("[categorizer_q3] start_consuming finished unexpectedly", flush=True)
     except MessageMiddlewareDisconnectedError:
         print("[categorizer_q3] Disconnected from middleware.", file=sys.stderr)
     except MessageMiddlewareMessageError:
@@ -78,7 +120,7 @@ def listen_for_transactions():
     except Exception as e:
         print(f"[categorizer_q3] Unexpected error while consuming: {e}", file=sys.stderr)
     finally:
-        queue.close()
+        topic_middleware.close()
     return semester_store_stats
 
 def send_results_to_gateway(semester_store_stats):
@@ -107,8 +149,10 @@ def main():
         print("[categorizer_q3] Waiting for RabbitMQ to be ready...", flush=True)
         time.sleep(30)  # Wait for RabbitMQ to be ready
         print("[categorizer_q3] Starting worker...", flush=True)
+        print("[categorizer_q3] About to call listen_for_transactions()...", flush=True)
         
         semester_store_stats = listen_for_transactions()
+        print("[categorizer_q3] listen_for_transactions() completed", flush=True)
         print("[categorizer_q3] Final semester-store stats:")
         for key, total in semester_store_stats.items():
             year, semester, store_id = key
