@@ -53,8 +53,7 @@ def handle_and_forward_chunk(client_id: int, csv_type: int, is_last: int, chunk:
     MAX_RETRIES = 10
     RETRY_DELAY = 3
     try:
-        if csv_type != 2:
-            print(f"[gateway_protocol] Forwarding message of type {csv_type} with {len(rows)} rows to the appropriate queue")
+            
         if csv_type == CSV_TYPES_REVERSE["transaction_items"]:  # transaction_items
             for attempt in range(MAX_RETRIES):
                 try:
