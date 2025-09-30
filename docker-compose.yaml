@@ -78,6 +78,11 @@ services:
       - ITEM_CATEGORIZER_QUEUE=categorizer_q2_receiver_queue
       - STORE_USER_CATEGORIZER_QUEUE=store_user_categorizer_queue
       - FILTER_YEAR=2024,2025
+      - TOPIC_EXCHANGE=categorizer_q2_topic_exchange
+      - FANOUT_EXCHANGE=categorizer_q2_fanout_exchange
+      - CATEGORIZER_Q4_TOPIC_EXCHANGE=categorizer_q4_topic_exchange
+      - CATEGORIZER_Q4_FANOUT_EXCHANGE=categorizer_q4_fanout_exchange
+      - CATEGORIZER_Q4_WORKERS=3
     depends_on:
       - rabbitmq_server
 
@@ -107,6 +112,7 @@ services:
       - RABBITMQ_HOST=rabbitmq_server
       - QUEUE_NAME=filter_by_amount_queue
       - MIN_AMOUNT=15.0
+      - RESULT_QUEUE=query1_result_receiver_queue
     depends_on:
       - rabbitmq_server
 
@@ -190,54 +196,59 @@ services:
       - GATEWAY_REQUEST_QUEUE=birthday_dictionary_client_request_queue
       - GATEWAY_CLIENT_DATA_QUEUE=gateway_client_data_queue
       - QUERY4_ANSWER_QUEUE=query4_answer_queue
+      - AMOUNT_OF_WORKERS=3
     depends_on:
       - rabbitmq_server
+      - gateway
 
-  # categorizer_q4_worker_1:
-  #   build:
-  #     context: .
-  #     dockerfile: ./workers/categorizer_q4/Dockerfile
-  #   container_name: categorizer_q4_worker_1
-  #   environment:
-  #     - RABBITMQ_HOST=rabbitmq_server
-  #     - RECEIVER_QUEUE=store_user_categorizer_queue_1
-  #     - TOPIC_EXCHANGE=categorizer_q4_topic_exchange
-  #     - FANOUT_EXCHANGE=categorizer_q4_fanout_exchange
-  #     - WORKER_INDEX=0
-  #     - AMOUNT_OF_WORKERS=3
-  #     - BIRTHDAY_DICT_QUEUE=birthday_dictionary_queue
-  #   depends_on:
-  #     - rabbitmq_server
+  categorizer_q4_worker_1:
+    build:
+      context: .
+      dockerfile: ./workers/categorizer_q4/Dockerfile
+    container_name: categorizer_q4_worker_1
+    environment:
+      - RABBITMQ_HOST=rabbitmq_server
+      - RECEIVER_QUEUE=store_user_categorizer_queue_1
+      - TOPIC_EXCHANGE=categorizer_q4_topic_exchange
+      - FANOUT_EXCHANGE=categorizer_q4_fanout_exchange
+      - WORKER_INDEX=0
+      - AMOUNT_OF_WORKERS=3
+      - BIRTHDAY_DICT_QUEUE=birthday_dictionary_queue
+    depends_on:
+      - rabbitmq_server
+      - gateway
 
-  # categorizer_q4_worker_2:
-  #   build:
-  #     context: .
-  #     dockerfile: ./workers/categorizer_q4/Dockerfile
-  #   container_name: categorizer_q4_worker_2
-  #   environment:
-  #     - RABBITMQ_HOST=rabbitmq_server
-  #     - RECEIVER_QUEUE=store_user_categorizer_queue_2
-  #     - TOPIC_EXCHANGE=categorizer_q4_topic_exchange
-  #     - FANOUT_EXCHANGE=categorizer_q4_fanout_exchange
-  #     - WORKER_INDEX=1
-  #     - AMOUNT_OF_WORKERS=3
-  #     - BIRTHDAY_DICT_QUEUE=birthday_dictionary_queue
-  #   depends_on:
-  #     - rabbitmq_server
+  categorizer_q4_worker_2:
+    build:
+      context: .
+      dockerfile: ./workers/categorizer_q4/Dockerfile
+    container_name: categorizer_q4_worker_2
+    environment:
+      - RABBITMQ_HOST=rabbitmq_server
+      - RECEIVER_QUEUE=store_user_categorizer_queue_2
+      - TOPIC_EXCHANGE=categorizer_q4_topic_exchange
+      - FANOUT_EXCHANGE=categorizer_q4_fanout_exchange
+      - WORKER_INDEX=1
+      - AMOUNT_OF_WORKERS=3
+      - BIRTHDAY_DICT_QUEUE=birthday_dictionary_queue
+    depends_on:
+      - rabbitmq_server
+      - gateway
 
-  # categorizer_q4_worker_3:
-  #   build:
-  #     context: .
-  #     dockerfile: ./workers/categorizer_q4/Dockerfile
-  #   container_name: categorizer_q4_worker_3
-  #   environment:
-  #     - RABBITMQ_HOST=rabbitmq_server
-  #     - RECEIVER_QUEUE=store_user_categorizer_queue_3
-  #     - TOPIC_EXCHANGE=categorizer_q4_topic_exchange
-  #     - FANOUT_EXCHANGE=categorizer_q4_fanout_exchange
-  #     - WORKER_INDEX=2
-  #     - AMOUNT_OF_WORKERS=3
-  #     - BIRTHDAY_DICT_QUEUE=birthday_dictionary_queue
-  #   depends_on:
-  #     - rabbitmq_server
+  categorizer_q4_worker_3:
+    build:
+      context: .
+      dockerfile: ./workers/categorizer_q4/Dockerfile
+    container_name: categorizer_q4_worker_3
+    environment:
+      - RABBITMQ_HOST=rabbitmq_server
+      - RECEIVER_QUEUE=store_user_categorizer_queue_3
+      - TOPIC_EXCHANGE=categorizer_q4_topic_exchange
+      - FANOUT_EXCHANGE=categorizer_q4_fanout_exchange
+      - WORKER_INDEX=2
+      - AMOUNT_OF_WORKERS=3
+      - BIRTHDAY_DICT_QUEUE=birthday_dictionary_queue
+    depends_on:
+      - rabbitmq_server
+      - gateway
 

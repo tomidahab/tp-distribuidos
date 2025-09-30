@@ -56,6 +56,19 @@ def on_message_callback_transactions(message: bytes, hour_filter_queue, categori
                 #q4_message, _ = build_message(client_id, type_of_message, 0, [row])
                 #categorizer_q4_topic_exchange.send(q4_message, routing_key=routing_key)
 
+            batches = defaultdict(list)
+            for row in new_rows:
+                dic_fields_row = row_to_dict(row, type_of_message)
+                store_id = int(dic_fields_row['store_id'])
+                routing_key = f"store.{store_id % CATEGORIZER_Q4_WORKERS}"
+                batches[routing_key].append(row)
+
+            for routing_key, batch_rows in batches.items():
+                if batch_rows:
+                    q4_message, _ = build_message(client_id, type_of_message, 0, batch_rows)
+                    print(f"[filter_by_year] Sending {len(batch_rows)} rows to categorizer_q4 with routing key {routing_key}")
+                    categorizer_q4_topic_exchange.send(q4_message, routing_key=routing_key)
+
         #if is_last:
             #end_message, _ = build_message(client_id, type_of_message, 1, [])
             #hour_filter_queue.send(end_message)
@@ -157,14 +170,13 @@ def main():
         )
         print(f"[filter_by_year] Connected to item categorizer fanout exchange: {FANOUT_EXCHANGE}")
         
-        # global categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange
-        # categorizer_q4_topic_exchange = MessageMiddlewareExchange(
-        #     host=RABBITMQ_HOST,
-        #     exchange_name=CATEGORIZER_Q4_TOPIC_EXCHANGE,
-        #     exchange_type='topic',
-        #     queue_name='', 
-        # )
-        # print(f"[filter_by_year] Connected to categorizer_q4 topic exchange: {CATEGORIZER_Q4_TOPIC_EXCHANGE}")
+        categorizer_q4_topic_exchange = MessageMiddlewareExchange(
+            host=RABBITMQ_HOST,
+            exchange_name=CATEGORIZER_Q4_TOPIC_EXCHANGE,
+            exchange_type='topic',
+            queue_name='', 
+        )
+        print(f"[filter_by_year] Connected to categorizer_q4 topic exchange: {CATEGORIZER_Q4_TOPIC_EXCHANGE}")
         
         # categorizer_q4_fanout_exchange = MessageMiddlewareExchange(
         #     host=RABBITMQ_HOST,

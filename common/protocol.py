@@ -5,7 +5,8 @@ CSV_TYPES = {
     1: "menu_items",
     2: "transaction_items",
     3: "transactions",
-    4: "users"
+    4: "users",
+    5: "client_request"  # Added type 5 for birthday dictionary client requests
 }
 
 CSV_TYPES_REVERSE = {v: k for k, v in CSV_TYPES.items()}
@@ -18,7 +19,8 @@ def row_to_dict(row: str, csv_type: int) -> Dict:
         1: ["item_id", "item_name", "category", "price", "is_seasonal", "available_from", "available_to"],
         2: ["transaction_id", "item_id", "quantity", "unit_price", "subtotal", "created_at"],
         3: ["transaction_id", "store_id", "payment_method_id", "voucher_id", "user_id", "original_amount", "discount_applied", "final_amount", "created_at"],
-        4: ["user_id", "gender", "birthdate", "registered_at"]
+        4: ["user_id", "gender", "birthdate", "registered_at"],
+        5: ["client_id"]  # For client request, adjust as needed
     }
     fields = row.split(",")
     header = HEADERS.get(csv_type)
@@ -55,7 +57,7 @@ def build_message(client_id: int, csv_type: int, is_last: int, rows: List[str]) 
     Header: 4 bytes client_id, 1 byte csv_type, 1 byte is_last
     Payload: rows en texto plano UTF-8 separados por \n, encodeado a bytes
     """
-    assert 1 <= csv_type <= 4, "csv_type debe estar entre 1 y 4"
+    assert 1 <= csv_type <= 5, "csv_type debe estar entre 1 y 5"
     assert is_last in (0, 1), "is_last debe ser 0 o 1"
     payload_text = "\n".join(rows)
     payload_bytes = payload_text.encode("utf-8")
