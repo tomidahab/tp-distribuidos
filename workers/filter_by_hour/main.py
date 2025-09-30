@@ -15,6 +15,8 @@ QUEUE_FILTER_AMOUNT = os.environ.get('QUEUE_FILTER_AMOUNT', 'filter_by_amount_qu
 CATEGORIZER_Q3_EXCHANGE = os.environ.get('CATEGORIZER_Q3_EXCHANGE', 'categorizer_q3_exchange')
 CATEGORIZER_Q3_FANOUT_EXCHANGE = f"{CATEGORIZER_Q3_EXCHANGE}_fanout"
 
+SEMESTER_KEYS_FOR_FANOUT = ['semester.2023-1', 'semester.2024-1', 'semester.2024-2','semester.2025-1']
+
 def get_semester_key(year, month):
     """Generate semester routing key based on year and month"""
     semester = 1 if 1 <= month <= 6 else 2
@@ -51,13 +53,13 @@ def on_message_callback(message: bytes, queue_filter_amount, categorizer_q3_topi
     filtered_rows = filter_message_by_hour(parsed_message, START_HOUR, END_HOUR)
 
     print(f"[worker] Received message of {len(filtered_rows)} rows, is_last={is_last}", flush=True)
-    print(f"[worker] DEBUG: filtered_rows length: {len(filtered_rows)}, is_last value: {is_last}, is_last type: {type(is_last)}", flush=True)
-    print(f"[worker] DEBUG: filtered_rows or is_last == 1: {filtered_rows or is_last == 1}", flush=True)
+    # print(f"[worker] DEBUG: filtered_rows length: {len(filtered_rows)}, is_last value: {is_last}, is_last type: {type(is_last)}", flush=True)
+    # print(f"[worker] DEBUG: filtered_rows or is_last == 1: {filtered_rows or is_last == 1}", flush=True)
 
     if (len(filtered_rows) != 0) or (is_last == 1):
-        print(f"[worker] INSIDE IF CONDITION", flush=True)
-        print(f"[worker] Number of rows on the message passed hour filter: {len(filtered_rows)}, is_last={is_last}", flush=True)
-        print(f"[worker] AFTER PRINT STATEMENT", flush=True)
+        # print(f"[worker] INSIDE IF CONDITION", flush=True)
+        # print(f"[worker] Number of rows on the message passed hour filter: {len(filtered_rows)}, is_last={is_last}", flush=True)
+        # print(f"[worker] AFTER PRINT STATEMENT", flush=True)
 
         # For Q1 - send to filter_by_amount
         if type_of_message == CSV_TYPES_REVERSE['transactions']:  # transactions
@@ -91,15 +93,20 @@ def on_message_callback(message: bytes, queue_filter_amount, categorizer_q3_topi
         else:
             print(f"[worker] Unknown csv_type: {type_of_message}", file=sys.stderr)
 
-        print(f"[worker] AFTER Finished processing message, is_last={is_last}", flush=True)
+        # print(f"[worker] AFTER Finished processing message, is_last={is_last}", flush=True)
         # Send END message when last message is received (OUTSIDE the type_of_message check)
         if is_last == 1:
             print(f"[worker] About to send END message, is_last={is_last}", flush=True)
             try:
-                end_message, _ = build_message(client_id, type_of_message, 1, [])
-                print(f"[worker] Built end message successfully", flush=True)
-                categorizer_q3_fanout_exchange.send(end_message)
-                print("[worker] Sent END message to categorizer_q3 via fanout exchange", flush=True)
+                # end_message, _ = build_message(client_id, type_of_message, 1, [])
+                # print(f"[worker] Built end message successfully", flush=True)
+                # categorizer_q3_fanout_exchange.send(end_message)
+                # print("[worker] Sent END message to categorizer_q3 via fanout exchange", flush=True)
+                for semester_key in SEMESTER_KEYS_FOR_FANOUT:
+                    end_message, _ = build_message(client_id, type_of_message, 1, [])
+                    print(f"[worker] Built end message for {semester_key} successfully", flush=True)
+                    categorizer_q3_topic_exchange.send(end_message, routing_key=semester_key)
+                    print(f"[worker] Sent END message to categorizer_q3 for {semester_key} via topic exchange", flush=True)
             except Exception as e:
                 print(f"[worker] ERROR sending END message: {e}", flush=True)
                 import traceback

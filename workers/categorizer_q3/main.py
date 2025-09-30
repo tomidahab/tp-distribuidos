@@ -58,6 +58,17 @@ def listen_for_transactions():
             routing_keys=worker_routing_keys
         )
         print(f"[categorizer_q3] Successfully created MessageMiddlewareExchange", flush=True)
+
+        # print(f"[categorizer_q3] Creating fanout MessageMiddlewareExchange for END messages using SAME queue...", flush=True)
+        # fanout_middleware = MessageMiddlewareExchange(
+        #     host=RABBITMQ_HOST, 
+        #     exchange_name=FANOUT_EXCHANGE, 
+        #     exchange_type='fanout',
+        #     queue_name=f"categorizer_q3_worker_{WORKER_INDEX}_queue",  # SAME queue as topic exchange
+        #     routing_keys=[]  # Fanout doesn't use routing keys
+        # )
+        # print(f"[categorizer_q3] Successfully created fanout MessageMiddlewareExchange", flush=True)
+
     except Exception as e:
         print(f"[categorizer_q3] Failed to connect to RabbitMQ: {e}", file=sys.stderr)
         return semester_store_stats
@@ -72,6 +83,8 @@ def listen_for_transactions():
             client_id = parsed_message['client_id']
             is_last = parsed_message['is_last']
             
+            print(f"[categorizer_q3] Message details - is_last: {is_last}, rows: {len(parsed_message['rows'])}", flush=True)
+
             for row in parsed_message['rows']:
                 print(f"[categorizer_q3] Processing row: {row}, is_last={is_last}", flush=True)
                 dic_fields_row = row_to_dict(row, type_of_message)
