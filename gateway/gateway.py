@@ -25,7 +25,7 @@ RESULT_Q3_FILE = os.path.join(OUTPUT_DIR, 'result_q3.csv')
 
 QUERY_3_TOTAL_WORKERS = int(os.environ.get('QUERY_3_TOTAL_WORKERS', 2))
 
-QUERIES_TO_COMPLETE = 2
+QUERIES_TO_COMPLETE = 3
 
 class Gateway:
     def __init__(self):
@@ -55,7 +55,13 @@ class Gateway:
             size, dictionary_str = unpack_response_message(message)
 
             self.save_temp_results(result_file, [dictionary_str])
-            self.mark_query_completed(result_queue)
+
+            # To easily ientify when the query is done
+            with open(result_file, 'r') as f:
+                lines = f.readlines()
+                if len(lines) >= 12:
+                    self.mark_query_completed(result_queue)
+            
             logging.info(f"[{result_queue}] Mensaje guardado en {result_file}")
             # logging.info(f"[{result_queue}] Enviando respuesta de tamaño {size} al cliente con contenido: {dictionary_str}")
             # send_response(self.client_skt, query_type + 2, dictionary_str) # Q2=4, Q3=5
@@ -161,7 +167,7 @@ class Gateway:
                 return
 
             self.send_file_result(RESULT_Q1_FILE)
-            #self.send_file_result(RESULT_Q2_FILE)
+            self.send_file_result(RESULT_Q2_FILE)
             self.send_file_result(RESULT_Q3_FILE)
 
             #self.clear_temp_files()

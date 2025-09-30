@@ -50,16 +50,15 @@ class Client:
         self.current_file.close()
         logging.info(f"Archivo {filename} enviado ({filesize} bytes).")
 
-    def recv_query_result(self, query):
+    def recv_query_result(self, query, max_results=float('inf')):
         is_last = False
         print(f"-------{query}-------")
-        count = 5 # Showing only first 5 results (for debug only)
         while not is_last:
             data_type, lines_batch, is_last = recv_lines_batch(self.skt)
             for line in lines_batch:
-                if count > 0:
+                if max_results > 0:
                     print(f"[{query} result]: ", line.strip())
-                    count -= 1
+                    max_results -= 1
         
 
     def run(self, data_sets, q4_dataset):
@@ -91,9 +90,9 @@ class Client:
                 self._send_file(q4_dataset[-1], True, True)
 
             # Wait for results
-            self.recv_query_result("Q1")
-            # self.recv_query_result("Q2")
-            self.recv_query_result("Q3")
+            self.recv_query_result("Q1", 5)
+            self.recv_query_result("Q2")
+            self.recv_query_result("Q3", 5)
 
             if q4_dataset:
                 # self.recv_query_result("Q4")
