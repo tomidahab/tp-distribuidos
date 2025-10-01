@@ -140,6 +140,13 @@ def handle_and_forward_chunk(client_id: int, csv_type: int, is_last: int, chunk:
                 print(f"[gateway_protocol] Failed to connect to menu_items fanout exchange after {MAX_RETRIES} retries", file=sys.stderr)
                 return -1
         elif csv_type == CSV_TYPES_REVERSE["users"]:  # users
+            
+            q4_rows = []
+            for row in rows:
+                row_items = row.split(",")
+                q4_rows.append(",".join([row_items[0], row_items[2]]))  # user_id, birthday
+            message, _ = build_message(client_id, csv_type, is_last, q4_rows) # Override message for q4
+
             for attempt in range(MAX_RETRIES):
                 try:
                     if birth_dic_data_responses_queue is None:

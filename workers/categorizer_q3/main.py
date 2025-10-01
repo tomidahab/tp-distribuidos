@@ -127,7 +127,7 @@ def listen_for_transactions():
         print(f"[categorizer_q3] Unexpected error while consuming: {e}", file=sys.stderr)
     finally:
         topic_middleware.close()
-        fanout_middleware.close()
+        # fanout_middleware.close()
     return semester_store_stats
 
 def send_results_to_gateway(semester_store_stats):
