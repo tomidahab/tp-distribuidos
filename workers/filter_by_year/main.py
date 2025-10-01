@@ -253,6 +253,9 @@ def main():
                 parsed_message = parse_message(message)
                 is_last = parsed_message['is_last']
                 
+                # Always process the message first
+                on_message_callback_t_items(message, item_categorizer_exchange, item_categorizer_fanout_exchange)
+                
                 if is_last:
                     transaction_items_end_received += 1
                     print(f"[filter_by_year] Worker {WORKER_INDEX} received transaction_items END message {transaction_items_end_received}")
@@ -261,7 +264,6 @@ def main():
                         receiver_exchange_t_items.stop_consuming()
                         return
                 
-                on_message_callback_t_items(message, item_categorizer_exchange, item_categorizer_fanout_exchange)
             except Exception as e:
                 print(f"[filter_by_year] Worker {WORKER_INDEX} Error in transaction_items callback: {e}", file=sys.stderr)
         
