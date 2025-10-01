@@ -12,10 +12,11 @@ FANOUT_EXCHANGE = os.environ.get('FANOUT_EXCHANGE', 'categorizer_q4_fanout_excha
 WORKER_INDEX = int(os.environ.get('WORKER_INDEX', 0))
 BIRTHDAY_DICT_QUEUE = os.environ.get('BIRTHDAY_DICT_QUEUE', 'birthday_dictionary_queue')
 AMOUNT_OF_WORKERS = int(os.environ.get('AMOUNT_OF_WORKERS', 1))
+NUMBER_OF_YEAR_WORKERS = int(os.environ.get('NUMBER_OF_YEAR_WORKERS', '3'))
 
 def listen_for_transactions():
     store_user_counter = defaultdict(Counter)
-    end_received = False
+    end_messages_received = 0
 
     topic_routing_key = f"store.{WORKER_INDEX}"
     print(f"[categorizer_q4] Worker index: {WORKER_INDEX}, routing key: {topic_routing_key}")
@@ -37,7 +38,7 @@ def listen_for_transactions():
     print(f"[categorizer_q4] Listening for transactions on queue: {RECEIVER_QUEUE} (topic key: {topic_routing_key})")
 
     def on_message_callback(message: bytes):
-        nonlocal end_received
+        nonlocal end_messages_received
         parsed_message = parse_message(message)
         type_of_message = parsed_message['csv_type']
         is_last = parsed_message['is_last']
@@ -48,10 +49,13 @@ def listen_for_transactions():
             user_id = dic_fields_row.get('user_id')
             if None not in (store_id, user_id):
                 store_user_counter[store_id][user_id] += 1
-        if is_last and not end_received:
-            end_received = True
-            print("[categorizer_q4] Received end message, stopping transaction collection.")
-            queue.stop_consuming()
+        
+        if is_last:
+            end_messages_received += 1
+            print(f"[categorizer_q4] Received END message {end_messages_received}/{NUMBER_OF_YEAR_WORKERS} from filter_by_year workers")
+            if end_messages_received >= NUMBER_OF_YEAR_WORKERS:
+                print(f"[categorizer_q4] Received all END messages from {NUMBER_OF_YEAR_WORKERS} filter_by_year workers, stopping transaction collection.")
+                queue.stop_consuming()
 
     try:
         queue.start_consuming(on_message_callback)

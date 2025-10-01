@@ -28,6 +28,7 @@ Q4_DATA_REQUESTS_QUEUE = os.environ.get('Q4_DATA_REQUESTS_QUEUE', 'birthday_dict
 RESULT_Q4_QUEUE = os.environ.get('RESULT_Q4_QUEUE', 'query4_answer_queue') # Modify to match others
 RESULT_Q4_FILE = os.path.join(OUTPUT_DIR, 'result_q4.csv')
 
+QUERY_1_TOTAL_WORKERS = int(os.environ.get('QUERY_1_TOTAL_WORKERS', 3))
 QUERY_3_TOTAL_WORKERS = int(os.environ.get('QUERY_3_TOTAL_WORKERS', 2))
 
 QUERIES_TO_COMPLETE = 3
@@ -111,31 +112,39 @@ class Gateway:
         sleep(config.MIDDLEWARE_UP_TIME)  # Esperar a que RabbitMQ esté listo
         logging.info(f"[{result_queue}] Waiting for messages in {result_queue}")
         queue = MessageMiddlewareQueue(os.environ.get('RABBITMQ_HOST', 'rabbitmq_server'), result_queue)
-        number_of_messages_received = 0
+        
+        # Separate counters for each query
+        q1_messages_received = 0
+        q3_messages_received = 0
+        
         def on_message_callback(message: bytes):
-            nonlocal number_of_messages_received
-            number_of_messages_received += 1
-            # Write message to result_q1.csv (append mode)
+            nonlocal q1_messages_received, q3_messages_received
+            
+            # Write message to result file (append mode)
             logging.info(f"[{result_queue}] Mensaje recibido en cola: {result_queue}")
             parsed_message = parse_message(message)
             rows = parsed_message['rows']
 
+            # Increment counter for specific query
+            if result_queue == RESULT_Q1_QUEUE:
+                q1_messages_received += 1
+                logging.info(f"[{result_queue}] Received Q1 message {q1_messages_received} with {len(rows)} rows, is_last={parsed_message['is_last']}")
+            
             if result_queue == RESULT_Q3_QUEUE:
-                logging.info(f"[{result_queue}] Received message {number_of_messages_received} with {len(rows)} rows, is_last={parsed_message['is_last']}")
+                q3_messages_received += 1
+                logging.info(f"[{result_queue}] Received Q3 message {q3_messages_received} with {len(rows)} rows, is_last={parsed_message['is_last']}")
 
             self.save_temp_results(result_file, rows)
             logging.info(f"[{result_queue}] Mensaje guardado en {result_file}")
 
-            if parsed_message['is_last'] and result_queue == RESULT_Q1_QUEUE:
+            # Check completion using specific counter for each query
+            if parsed_message['is_last'] and q1_messages_received == QUERY_1_TOTAL_WORKERS and result_queue == RESULT_Q1_QUEUE:
+                logging.info(f"[{result_queue}] Q1 completed: received {q1_messages_received}/{QUERY_1_TOTAL_WORKERS} is_last messages")
                 self.mark_query_completed(result_queue)
 
-            if parsed_message["is_last"] and number_of_messages_received == QUERY_3_TOTAL_WORKERS and result_queue == RESULT_Q3_QUEUE:
+            if parsed_message["is_last"] and q3_messages_received == QUERY_3_TOTAL_WORKERS and result_queue == RESULT_Q3_QUEUE:
+                logging.info(f"[{result_queue}] Q3 completed: received {q3_messages_received}/{QUERY_3_TOTAL_WORKERS} is_last messages")
                 self.mark_query_completed(result_queue)
-
-                # logging.info(f"[{result_queue}] Mensaje final recibido, enviando respuesta al cliente.")
-                # self.send_response_from_file(parsed_message['csv_type'], result_file)
-                # os.remove(result_file)
-                # logging.info(f"[{result_queue}] Respuesta enviada, persistencia eliminada.")
 
         try:
             queue.start_consuming(on_message_callback)
@@ -177,7 +186,13 @@ class Gateway:
         self.clear_temp_files()
         try:
             self.receive_datasets()
-            logging.info("Todos los archivos fueron recibidos correctamente.")    
+            logging.info("Todos los archivos fueron recibidos correctamente.")
+            
+            # Send END messages to all filter_by_year workers
+            logging.info("Sending END messages to filter_by_year workers...")
+            send_end_messages_to_filter_by_year()
+            logging.info("END messages sent to filter_by_year workers.")
+            
             # All files sent, now wait for queries to finish
             with self.cond:
                 while self.queries_done < QUERIES_TO_COMPLETE and not self.stop_by_sigterm:

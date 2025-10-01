@@ -22,9 +22,10 @@ except Exception as e:
 
 RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq_server')
 RECEIVER_EXCHANGE = os.environ.get('RECEIVER_EXCHANGE', 'categorizer_q3_exchange')
-FANOUT_EXCHANGE = f"{RECEIVER_EXCHANGE}_fanout"
+FANOUT_EXCHANGE = os.environ.get('FANOUT_EXCHANGE', 'categorizer_q3_fanout_exchange')
 WORKER_INDEX = int(os.environ.get('WORKER_INDEX', '0'))
 GATEWAY_QUEUE = os.environ.get('GATEWAY_QUEUE', 'query3_result_receiver_queue')
+NUMBER_OF_HOUR_WORKERS = int(os.environ.get('NUMBER_OF_HOUR_WORKERS', '3'))
 
 # Define semester mapping for worker distribution
 SEMESTER_MAPPING = {
@@ -38,6 +39,7 @@ def get_semester(month):
 def listen_for_transactions():
     # Agregación: {(year, semester, store_id): total_payment}
     semester_store_stats = defaultdict(float)
+    end_messages_received = 0
     
     # Get routing keys for this worker
     worker_routing_keys = SEMESTER_MAPPING.get(WORKER_INDEX, [])
@@ -49,7 +51,7 @@ def listen_for_transactions():
     print(f"[categorizer_q3] About to create MessageMiddlewareExchange with exchange: {RECEIVER_EXCHANGE}", flush=True)
     
     try:
-        print(f"[categorizer_q3] Creating MessageMiddlewareExchange...", flush=True)
+        print(f"[categorizer_q3] Creating topic MessageMiddlewareExchange for data messages...", flush=True)
         topic_middleware = MessageMiddlewareExchange(
             host=RABBITMQ_HOST, 
             exchange_name=RECEIVER_EXCHANGE, 
@@ -57,17 +59,17 @@ def listen_for_transactions():
             queue_name=f"categorizer_q3_worker_{WORKER_INDEX}_queue",
             routing_keys=worker_routing_keys
         )
-        print(f"[categorizer_q3] Successfully created MessageMiddlewareExchange", flush=True)
+        print(f"[categorizer_q3] Successfully created topic MessageMiddlewareExchange", flush=True)
 
-        # print(f"[categorizer_q3] Creating fanout MessageMiddlewareExchange for END messages using SAME queue...", flush=True)
-        # fanout_middleware = MessageMiddlewareExchange(
-        #     host=RABBITMQ_HOST, 
-        #     exchange_name=FANOUT_EXCHANGE, 
-        #     exchange_type='fanout',
-        #     queue_name=f"categorizer_q3_worker_{WORKER_INDEX}_queue",  # SAME queue as topic exchange
-        #     routing_keys=[]  # Fanout doesn't use routing keys
-        # )
-        # print(f"[categorizer_q3] Successfully created fanout MessageMiddlewareExchange", flush=True)
+        print(f"[categorizer_q3] Creating fanout MessageMiddlewareExchange for END messages using SAME queue...", flush=True)
+        fanout_middleware = MessageMiddlewareExchange(
+            host=RABBITMQ_HOST, 
+            exchange_name=FANOUT_EXCHANGE, 
+            exchange_type='fanout',
+            queue_name=f"categorizer_q3_worker_{WORKER_INDEX}_queue",  # SAME queue as topic exchange
+            routing_keys=[]  # Fanout doesn't use routing keys
+        )
+        print(f"[categorizer_q3] Successfully created fanout MessageMiddlewareExchange", flush=True)
 
     except Exception as e:
         print(f"[categorizer_q3] Failed to connect to RabbitMQ: {e}", file=sys.stderr)
@@ -76,6 +78,7 @@ def listen_for_transactions():
     print(f"[categorizer_q3] Worker {WORKER_INDEX} listening for transactions on exchange: {RECEIVER_EXCHANGE} with routing keys: {worker_routing_keys}")
 
     def on_message_callback(message: bytes):
+        nonlocal end_messages_received  # Allow modification of the outer variable
         print(f"[categorizer_q3] Worker {WORKER_INDEX} received a message!", flush=True)
         try:
             parsed_message = parse_message(message)
@@ -104,8 +107,11 @@ def listen_for_transactions():
                 semester_store_stats[key] += payment_value
                 
             if is_last:
-                print("[categorizer_q3] Received end message, stopping transaction collection.")
-                topic_middleware.stop_consuming()
+                end_messages_received += 1
+                print(f"[categorizer_q3] Worker {WORKER_INDEX} received END message {end_messages_received}/{NUMBER_OF_HOUR_WORKERS}")
+                if end_messages_received >= NUMBER_OF_HOUR_WORKERS:
+                    print(f"[categorizer_q3] Worker {WORKER_INDEX} received all END messages, stopping transaction collection.")
+                    topic_middleware.stop_consuming()
         except Exception as e:
             print(f"[categorizer_q3] Error processing transaction message: {e}", file=sys.stderr)
 
@@ -121,6 +127,7 @@ def listen_for_transactions():
         print(f"[categorizer_q3] Unexpected error while consuming: {e}", file=sys.stderr)
     finally:
         topic_middleware.close()
+        fanout_middleware.close()
     return semester_store_stats
 
 def send_results_to_gateway(semester_store_stats):

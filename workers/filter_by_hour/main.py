@@ -8,14 +8,24 @@ from common.protocol import parse_message, row_to_dict, build_message, CSV_TYPES
 from common.middleware import MessageMiddlewareQueue, MessageMiddlewareExchange, MessageMiddlewareDisconnectedError, MessageMiddlewareMessageError
 
 RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq_server')
-RECEIVER_QUEUE = os.environ.get('RECEIVER_QUEUE', 'filter_by_hour_queue')
+RECEIVER_EXCHANGE = os.environ.get('RECEIVER_EXCHANGE', 'filter_by_hour_exchange')
+WORKER_INDEX = int(os.environ.get('WORKER_INDEX', '0'))
 START_HOUR = int(os.environ.get('START_HOUR', '6'))
 END_HOUR = int(os.environ.get('END_HOUR', '11'))
-QUEUE_FILTER_AMOUNT = os.environ.get('QUEUE_FILTER_AMOUNT', 'filter_by_amount_queue')
+FILTER_BY_AMOUNT_EXCHANGE = os.environ.get('FILTER_BY_AMOUNT_EXCHANGE', 'filter_by_amount_exchange')
 CATEGORIZER_Q3_EXCHANGE = os.environ.get('CATEGORIZER_Q3_EXCHANGE', 'categorizer_q3_exchange')
-CATEGORIZER_Q3_FANOUT_EXCHANGE = f"{CATEGORIZER_Q3_EXCHANGE}_fanout"
+CATEGORIZER_Q3_FANOUT_EXCHANGE = os.environ.get('CATEGORIZER_Q3_FANOUT_EXCHANGE', 'categorizer_q3_fanout_exchange')
+NUMBER_OF_AMOUNT_WORKERS = int(os.environ.get('NUMBER_OF_AMOUNT_WORKERS', '3'))
+NUMBER_OF_HOUR_WORKERS = int(os.environ.get('NUMBER_OF_HOUR_WORKERS', '3'))
+NUMBER_OF_YEAR_WORKERS = int(os.environ.get('NUMBER_OF_YEAR_WORKERS', '3'))
 
 SEMESTER_KEYS_FOR_FANOUT = ['semester.2023-1', 'semester.2024-1', 'semester.2024-2','semester.2025-1']
+
+# Global counters for debugging
+rows_received = 0
+rows_sent_to_amount = 0
+rows_sent_to_q3 = 0
+end_messages_received = 0
 
 def get_semester_key(year, month):
     """Generate semester routing key based on year and month"""
@@ -44,27 +54,46 @@ def filter_message_by_hour(parsed_message, start_hour: int, end_hour: int) -> li
         print(f"[filter] Error parsing message: {e}", file=sys.stderr)
         return []
 
-def on_message_callback(message: bytes, queue_filter_amount, categorizer_q3_topic_exchange, categorizer_q3_fanout_exchange):
-    print("[worker] Received a message!", flush=True)
+def on_message_callback(message: bytes, filter_by_amount_exchange, categorizer_q3_topic_exchange, categorizer_q3_fanout_exchange, should_stop):
+    global rows_received, rows_sent_to_amount, rows_sent_to_q3, end_messages_received
+    
+    if should_stop.is_set():  # Don't process if we're stopping
+        return
+        
+    print(f"[filter_by_hour] Worker {WORKER_INDEX} received a message!", flush=True)
     parsed_message = parse_message(message)
     type_of_message = parsed_message['csv_type']  
     client_id = parsed_message['client_id']
     is_last = int(parsed_message['is_last'])
+    
+    # Count incoming rows
+    incoming_rows = len(parsed_message['rows'])
+    rows_received += incoming_rows
+    print(f"[filter_by_hour] Worker {WORKER_INDEX} received {incoming_rows} rows (total received: {rows_received})", flush=True)
+    
     filtered_rows = filter_message_by_hour(parsed_message, START_HOUR, END_HOUR)
 
-    print(f"[worker] Received message of {len(filtered_rows)} rows, is_last={is_last}", flush=True)
-    # print(f"[worker] DEBUG: filtered_rows length: {len(filtered_rows)}, is_last value: {is_last}, is_last type: {type(is_last)}", flush=True)
-    # print(f"[worker] DEBUG: filtered_rows or is_last == 1: {filtered_rows or is_last == 1}", flush=True)
+    print(f"[filter_by_hour] Worker {WORKER_INDEX} filtered message: {len(filtered_rows)} rows remaining, is_last={is_last}", flush=True)
 
     if (len(filtered_rows) != 0) or (is_last == 1):
-        # print(f"[worker] INSIDE IF CONDITION", flush=True)
-        # print(f"[worker] Number of rows on the message passed hour filter: {len(filtered_rows)}, is_last={is_last}", flush=True)
-        # print(f"[worker] AFTER PRINT STATEMENT", flush=True)
-
-        # For Q1 - send to filter_by_amount
+        # For Q1 - send to filter_by_amount exchange
         if type_of_message == CSV_TYPES_REVERSE['transactions']:  # transactions
-            new_message, _ = build_message(client_id, type_of_message, is_last, filtered_rows)
-            queue_filter_amount.send(new_message)
+            # Route by transaction_id for load balancing
+            if filtered_rows:
+                # Group rows by worker to send in batches instead of one by one
+                rows_by_worker = defaultdict(list)
+                for i, row in enumerate(filtered_rows):
+                    worker_index = i % NUMBER_OF_AMOUNT_WORKERS  # Simple round robin by row index
+                    routing_key = f"transaction.{worker_index}"
+                    rows_by_worker[routing_key].append(row)
+                
+                # Send batched messages to each worker
+                for routing_key, worker_rows in rows_by_worker.items():
+                    if worker_rows:
+                        new_message, _ = build_message(client_id, type_of_message, 0, worker_rows)
+                        filter_by_amount_exchange.send(new_message, routing_key=routing_key)
+                        rows_sent_to_amount += len(worker_rows)
+                        print(f"[filter_by_hour] Worker {WORKER_INDEX} sent {len(worker_rows)} rows to {routing_key} (total sent to amount: {rows_sent_to_amount})", flush=True)
             
             # For Q3 - group by semester and send to topic exchange
             if filtered_rows:  # Only process if there are rows
@@ -85,67 +114,90 @@ def on_message_callback(message: bytes, queue_filter_amount, categorizer_q3_topi
                 for semester_key, semester_rows in rows_by_semester.items():
                     if semester_rows:
                         semester_message, _ = build_message(client_id, type_of_message, 0, semester_rows)
-                        print(f"[worker] Sending {len(semester_rows)} rows for {semester_key} to categorizer_q3, is_last={is_last}")
                         categorizer_q3_topic_exchange.send(semester_message, routing_key=semester_key)
+                        rows_sent_to_q3 += len(semester_rows)
+                        print(f"[filter_by_hour] Worker {WORKER_INDEX} sent {len(semester_rows)} rows for {semester_key} to categorizer_q3 (total sent to q3: {rows_sent_to_q3})", flush=True)
                 
         elif type_of_message == CSV_TYPES_REVERSE['transaction_items']:  # transaction_items
-            print(f"[worker] Received a transaction_items message, that should never happen!", flush=True)
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} received a transaction_items message, that should never happen!", flush=True)
         else:
-            print(f"[worker] Unknown csv_type: {type_of_message}", file=sys.stderr)
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} unknown csv_type: {type_of_message}", file=sys.stderr)
+    else:
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} whole message filtered out by hour.")
 
-        # print(f"[worker] AFTER Finished processing message, is_last={is_last}", flush=True)
-        # Send END message when last message is received (OUTSIDE the type_of_message check)
-        if is_last == 1:
-            print(f"[worker] About to send END message, is_last={is_last}", flush=True)
+    # Handle END message when last message is received
+    if is_last == 1:
+        end_messages_received += 1
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} received END message {end_messages_received}/{NUMBER_OF_YEAR_WORKERS} from filter_by_year", flush=True)
+        
+        if end_messages_received >= NUMBER_OF_YEAR_WORKERS:
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} received all END messages from filter_by_year workers. FINAL STATS: received={rows_received} rows, sent_to_amount={rows_sent_to_amount}, sent_to_q3={rows_sent_to_q3}", flush=True)
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} about to send END message", flush=True)
             try:
-                # end_message, _ = build_message(client_id, type_of_message, 1, [])
-                # print(f"[worker] Built end message successfully", flush=True)
-                # categorizer_q3_fanout_exchange.send(end_message)
-                # print("[worker] Sent END message to categorizer_q3 via fanout exchange", flush=True)
-                for semester_key in SEMESTER_KEYS_FOR_FANOUT:
-                    end_message, _ = build_message(client_id, type_of_message, 1, [])
-                    print(f"[worker] Built end message for {semester_key} successfully", flush=True)
-                    categorizer_q3_topic_exchange.send(end_message, routing_key=semester_key)
-                    print(f"[worker] Sent END message to categorizer_q3 for {semester_key} via topic exchange", flush=True)
+                # Send END to filter_by_amount (to all workers)
+                end_message, _ = build_message(client_id, type_of_message, 1, [])
+                for i in range(NUMBER_OF_AMOUNT_WORKERS):
+                    routing_key = f"transaction.{i}"
+                    filter_by_amount_exchange.send(end_message, routing_key=routing_key)
+                    print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message to filter_by_amount worker {i} via topic exchange", flush=True)
+                
+                # Send END to categorizer_q3 via fanout exchange (reaches all workers)
+                end_message, _ = build_message(client_id, type_of_message, 1, [])
+                categorizer_q3_fanout_exchange.send(end_message)
+                print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message to categorizer_q3 via fanout exchange", flush=True)
             except Exception as e:
-                print(f"[worker] ERROR sending END message: {e}", flush=True)
+                print(f"[filter_by_hour] Worker {WORKER_INDEX} ERROR sending END message: {e}", flush=True)
                 import traceback
                 traceback.print_exc()
-    else:
-        print(f"[worker] Whole Message filtered out by hour.")
+            
+            should_stop.set()
 
-def make_on_message_callback(queue_filter_amount, categorizer_q3_topic_exchange, categorizer_q3_fanout_exchange):
+
+def make_on_message_callback(filter_by_amount_exchange, categorizer_q3_topic_exchange, categorizer_q3_fanout_exchange, should_stop):
     def wrapper(message: bytes):
-        on_message_callback(message, queue_filter_amount, categorizer_q3_topic_exchange, categorizer_q3_fanout_exchange)
+        on_message_callback(message, filter_by_amount_exchange, categorizer_q3_topic_exchange, categorizer_q3_fanout_exchange, should_stop)
     return wrapper
 
 def main():
-    print("[filter_by_hour] STARTING UP - Basic imports done", flush=True)
-    print(f"[filter_by_hour] Environment: RECEIVER_QUEUE={RECEIVER_QUEUE}, START_HOUR={START_HOUR}, END_HOUR={END_HOUR}", flush=True)
-    print(f"[filter_by_hour] Environment: QUEUE_FILTER_AMOUNT={QUEUE_FILTER_AMOUNT}", flush=True)
-    print(f"[filter_by_hour] Environment: CATEGORIZER_Q3_EXCHANGE={CATEGORIZER_Q3_EXCHANGE}", flush=True)
-    print(f"[filter_by_hour] Environment: CATEGORIZER_Q3_FANOUT_EXCHANGE={CATEGORIZER_Q3_FANOUT_EXCHANGE}", flush=True)
+    import threading
     
-    print("[filter_by_hour] Waiting for RabbitMQ to be ready...", flush=True)
+    # Global counters for debugging
+    global rows_received, rows_sent_to_amount, rows_sent_to_q3
+    rows_received = 0
+    rows_sent_to_amount = 0
+    rows_sent_to_q3 = 0
+    
+    print(f"[filter_by_hour] Worker {WORKER_INDEX} STARTING UP - Basic imports done", flush=True)
+    print(f"[filter_by_hour] Worker {WORKER_INDEX} Environment: RECEIVER_EXCHANGE={RECEIVER_EXCHANGE}, START_HOUR={START_HOUR}, END_HOUR={END_HOUR}", flush=True)
+    print(f"[filter_by_hour] Worker {WORKER_INDEX} Environment: FILTER_BY_AMOUNT_EXCHANGE={FILTER_BY_AMOUNT_EXCHANGE}", flush=True)
+    print(f"[filter_by_hour] Worker {WORKER_INDEX} Environment: CATEGORIZER_Q3_EXCHANGE={CATEGORIZER_Q3_EXCHANGE}", flush=True)
+    
+    print(f"[filter_by_hour] Worker {WORKER_INDEX} waiting for RabbitMQ to be ready...", flush=True)
     time.sleep(30)  # Wait for RabbitMQ to be ready
-    print("[filter_by_hour] RabbitMQ should be ready now!", flush=True)
+    print(f"[filter_by_hour] Worker {WORKER_INDEX} RabbitMQ should be ready now!", flush=True)
+    
+    # Create topic exchange middleware for receiving messages
+    topic_middleware = MessageMiddlewareExchange(
+        host=RABBITMQ_HOST,
+        exchange_name=RECEIVER_EXCHANGE,
+        exchange_type='topic',
+        queue_name=f"filter_by_hour_worker_{WORKER_INDEX}_queue",
+        routing_keys=[f'hour.{WORKER_INDEX}']  # Each worker listens to specific routing key
+    )
+    
+    print(f"[filter_by_hour] Worker {WORKER_INDEX} connecting to exchanges...", flush=True)
     
     try:
-        print("[filter_by_hour] Creating queue connection...")
-        queue = MessageMiddlewareQueue(
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} creating filter_by_amount topic exchange connection...")
+        filter_by_amount_exchange = MessageMiddlewareExchange(
             RABBITMQ_HOST,
-            RECEIVER_QUEUE
+            exchange_name=FILTER_BY_AMOUNT_EXCHANGE,
+            exchange_type='topic',
+            queue_name=""  # Empty queue since we're only sending, not consuming
         )
-        print(f"[filter_by_hour] Connected to queue: {RECEIVER_QUEUE}")
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} connected to filter_by_amount topic exchange: {FILTER_BY_AMOUNT_EXCHANGE}")
         
-        print("[filter_by_hour] Creating filter_amount queue connection...")
-        queue_filter_amount = MessageMiddlewareQueue(
-            RABBITMQ_HOST,
-            QUEUE_FILTER_AMOUNT
-        )
-        print(f"[filter_by_hour] Connected to queue: {QUEUE_FILTER_AMOUNT}")
-        
-        print("[filter_by_hour] Creating categorizer_q3 topic exchange connection...")
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} creating categorizer_q3 topic exchange connection...")
         # Connect to categorizer_q3 topic exchange
         categorizer_q3_topic_exchange = MessageMiddlewareExchange(
             RABBITMQ_HOST,
@@ -153,36 +205,64 @@ def main():
             exchange_type='topic',
             queue_name=""  # Empty queue since we're only sending, not consuming
         )
-        print(f"[filter_by_hour] Connected to categorizer_q3 topic exchange: {CATEGORIZER_Q3_EXCHANGE}")
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} connected to categorizer_q3 topic exchange: {CATEGORIZER_Q3_EXCHANGE}")
         
-        print("[filter_by_hour] Creating categorizer_q3 fanout exchange connection...")
-        # Connect to categorizer_q3 fanout exchange for Q1
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} creating categorizer_q3 fanout exchange connection...")
+        # Connect to categorizer_q3 fanout exchange for END messages
         categorizer_q3_fanout_exchange = MessageMiddlewareExchange(
             RABBITMQ_HOST,
             exchange_name=CATEGORIZER_Q3_FANOUT_EXCHANGE,
             exchange_type='fanout',
             queue_name=""  # Empty queue since we're only sending, not consuming
         )
-        print(f"[filter_by_hour] Connected to categorizer_q3 fanout exchange: {CATEGORIZER_Q3_FANOUT_EXCHANGE}")
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} connected to categorizer_q3 fanout exchange: {CATEGORIZER_Q3_FANOUT_EXCHANGE}")
         
-        print("[filter_by_hour] Creating callback and starting to consume...")
-        callback = make_on_message_callback(queue_filter_amount, categorizer_q3_topic_exchange, categorizer_q3_fanout_exchange)
-        print("[filter_by_hour] About to start consuming messages...")
-        queue.start_consuming(callback)
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} listening for transactions on exchange: {RECEIVER_EXCHANGE} with routing key: hour.{WORKER_INDEX}", flush=True)
+        
+        # Flag to coordinate stopping
+        should_stop = threading.Event()
+        
+        # Start consuming from topic exchange (blocking)
+        topic_callback = make_on_message_callback(filter_by_amount_exchange, categorizer_q3_topic_exchange, categorizer_q3_fanout_exchange, should_stop)
+        topic_middleware.start_consuming(topic_callback)
+        
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} topic consuming finished", flush=True)
+        
+        should_stop.set()
+            
     except MessageMiddlewareDisconnectedError:
-        print("[filter_by_hour] Disconnected from middleware.", file=sys.stderr)
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} disconnected from middleware.", file=sys.stderr)
     except MessageMiddlewareMessageError:
-        print("[filter_by_hour] Message error in middleware.", file=sys.stderr)
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} message error in middleware.", file=sys.stderr)
     except KeyboardInterrupt:
-        print("[filter_by_hour] Stopping...")
-        queue.stop_consuming()
-        queue.close()
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} stopping...")
+        should_stop.set()
+        topic_middleware.stop_consuming()
+
+    finally:
+        try:
+            topic_middleware.close()
+        except Exception as e:
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} error closing topic middleware: {e}", file=sys.stderr)
+        try:
+            filter_by_amount_exchange.close()
+        except Exception as e:
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} error closing filter_by_amount_exchange: {e}", file=sys.stderr)
+        try:
+            categorizer_q3_topic_exchange.close()
+        except Exception as e:
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} error closing categorizer_q3_topic_exchange: {e}", file=sys.stderr)
+        try:
+            categorizer_q3_fanout_exchange.close()
+        except Exception as e:
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} error closing categorizer_q3_fanout_exchange: {e}", file=sys.stderr)
 
 if __name__ == "__main__":
-    print("[filter_by_hour] Script starting - __name__ == '__main__'", flush=True)
+    print(f"[filter_by_hour] Worker {WORKER_INDEX} script starting - __name__ == '__main__'", flush=True)
     try:
         main()
     except Exception as e:
-        print(f"[filter_by_hour] EXCEPTION: {e}", flush=True)
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} EXCEPTION: {e}", flush=True)
         import traceback
+        traceback.print_exc()
         traceback.print_exc()
