@@ -22,7 +22,7 @@ except Exception as e:
 
 RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq_server')
 RECEIVER_EXCHANGE = os.environ.get('RECEIVER_EXCHANGE', 'categorizer_q3_exchange')
-FANOUT_EXCHANGE = f"{RECEIVER_EXCHANGE}_fanout"
+FANOUT_EXCHANGE = os.environ.get('FANOUT_EXCHANGE', 'categorizer_q3_fanout_exchange')
 WORKER_INDEX = int(os.environ.get('WORKER_INDEX', '0'))
 GATEWAY_QUEUE = os.environ.get('GATEWAY_QUEUE', 'query3_result_receiver_queue')
 NUMBER_OF_HOUR_WORKERS = int(os.environ.get('NUMBER_OF_HOUR_WORKERS', '3'))
@@ -51,7 +51,7 @@ def listen_for_transactions():
     print(f"[categorizer_q3] About to create MessageMiddlewareExchange with exchange: {RECEIVER_EXCHANGE}", flush=True)
     
     try:
-        print(f"[categorizer_q3] Creating MessageMiddlewareExchange...", flush=True)
+        print(f"[categorizer_q3] Creating topic MessageMiddlewareExchange for data messages...", flush=True)
         topic_middleware = MessageMiddlewareExchange(
             host=RABBITMQ_HOST, 
             exchange_name=RECEIVER_EXCHANGE, 
@@ -59,17 +59,17 @@ def listen_for_transactions():
             queue_name=f"categorizer_q3_worker_{WORKER_INDEX}_queue",
             routing_keys=worker_routing_keys
         )
-        print(f"[categorizer_q3] Successfully created MessageMiddlewareExchange", flush=True)
+        print(f"[categorizer_q3] Successfully created topic MessageMiddlewareExchange", flush=True)
 
-        # print(f"[categorizer_q3] Creating fanout MessageMiddlewareExchange for END messages using SAME queue...", flush=True)
-        # fanout_middleware = MessageMiddlewareExchange(
-        #     host=RABBITMQ_HOST, 
-        #     exchange_name=FANOUT_EXCHANGE, 
-        #     exchange_type='fanout',
-        #     queue_name=f"categorizer_q3_worker_{WORKER_INDEX}_queue",  # SAME queue as topic exchange
-        #     routing_keys=[]  # Fanout doesn't use routing keys
-        # )
-        # print(f"[categorizer_q3] Successfully created fanout MessageMiddlewareExchange", flush=True)
+        print(f"[categorizer_q3] Creating fanout MessageMiddlewareExchange for END messages using SAME queue...", flush=True)
+        fanout_middleware = MessageMiddlewareExchange(
+            host=RABBITMQ_HOST, 
+            exchange_name=FANOUT_EXCHANGE, 
+            exchange_type='fanout',
+            queue_name=f"categorizer_q3_worker_{WORKER_INDEX}_queue",  # SAME queue as topic exchange
+            routing_keys=[]  # Fanout doesn't use routing keys
+        )
+        print(f"[categorizer_q3] Successfully created fanout MessageMiddlewareExchange", flush=True)
 
     except Exception as e:
         print(f"[categorizer_q3] Failed to connect to RabbitMQ: {e}", file=sys.stderr)
@@ -127,6 +127,7 @@ def listen_for_transactions():
         print(f"[categorizer_q3] Unexpected error while consuming: {e}", file=sys.stderr)
     finally:
         topic_middleware.close()
+        fanout_middleware.close()
     return semester_store_stats
 
 def send_results_to_gateway(semester_store_stats):

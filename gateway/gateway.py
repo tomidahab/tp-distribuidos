@@ -186,7 +186,13 @@ class Gateway:
         self.clear_temp_files()
         try:
             self.receive_datasets()
-            logging.info("Todos los archivos fueron recibidos correctamente.")    
+            logging.info("Todos los archivos fueron recibidos correctamente.")
+            
+            # Send END messages to all filter_by_year workers
+            logging.info("Sending END messages to filter_by_year workers...")
+            send_end_messages_to_filter_by_year()
+            logging.info("END messages sent to filter_by_year workers.")
+            
             # All files sent, now wait for queries to finish
             with self.cond:
                 while self.queries_done < QUERIES_TO_COMPLETE and not self.stop_by_sigterm:

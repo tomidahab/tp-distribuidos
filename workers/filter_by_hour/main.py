@@ -14,8 +14,10 @@ START_HOUR = int(os.environ.get('START_HOUR', '6'))
 END_HOUR = int(os.environ.get('END_HOUR', '11'))
 FILTER_BY_AMOUNT_EXCHANGE = os.environ.get('FILTER_BY_AMOUNT_EXCHANGE', 'filter_by_amount_exchange')
 CATEGORIZER_Q3_EXCHANGE = os.environ.get('CATEGORIZER_Q3_EXCHANGE', 'categorizer_q3_exchange')
+CATEGORIZER_Q3_FANOUT_EXCHANGE = os.environ.get('CATEGORIZER_Q3_FANOUT_EXCHANGE', 'categorizer_q3_fanout_exchange')
 NUMBER_OF_AMOUNT_WORKERS = int(os.environ.get('NUMBER_OF_AMOUNT_WORKERS', '3'))
 NUMBER_OF_HOUR_WORKERS = int(os.environ.get('NUMBER_OF_HOUR_WORKERS', '3'))
+NUMBER_OF_YEAR_WORKERS = int(os.environ.get('NUMBER_OF_YEAR_WORKERS', '3'))
 
 SEMESTER_KEYS_FOR_FANOUT = ['semester.2023-1', 'semester.2024-1', 'semester.2024-2','semester.2025-1']
 
@@ -23,6 +25,7 @@ SEMESTER_KEYS_FOR_FANOUT = ['semester.2023-1', 'semester.2024-1', 'semester.2024
 rows_received = 0
 rows_sent_to_amount = 0
 rows_sent_to_q3 = 0
+end_messages_received = 0
 
 def get_semester_key(year, month):
     """Generate semester routing key based on year and month"""
@@ -51,8 +54,8 @@ def filter_message_by_hour(parsed_message, start_hour: int, end_hour: int) -> li
         print(f"[filter] Error parsing message: {e}", file=sys.stderr)
         return []
 
-def on_message_callback(message: bytes, filter_by_amount_exchange, categorizer_q3_topic_exchange, should_stop):
-    global rows_received, rows_sent_to_amount, rows_sent_to_q3
+def on_message_callback(message: bytes, filter_by_amount_exchange, categorizer_q3_topic_exchange, categorizer_q3_fanout_exchange, should_stop):
+    global rows_received, rows_sent_to_amount, rows_sent_to_q3, end_messages_received
     
     if should_stop.is_set():  # Don't process if we're stopping
         return
@@ -122,34 +125,37 @@ def on_message_callback(message: bytes, filter_by_amount_exchange, categorizer_q
     else:
         print(f"[filter_by_hour] Worker {WORKER_INDEX} whole message filtered out by hour.")
 
-    # Send END message when last message is received
+    # Handle END message when last message is received
     if is_last == 1:
-        print(f"[filter_by_hour] Worker {WORKER_INDEX} received END message. FINAL STATS: received={rows_received} rows, sent_to_amount={rows_sent_to_amount}, sent_to_q3={rows_sent_to_q3}", flush=True)
-        print(f"[filter_by_hour] Worker {WORKER_INDEX} about to send END message, is_last={is_last}", flush=True)
-        try:
-            # Send END to filter_by_amount (to all workers)
-            end_message, _ = build_message(client_id, type_of_message, 1, [])
-            for i in range(NUMBER_OF_AMOUNT_WORKERS):
-                routing_key = f"transaction.{i}"
-                filter_by_amount_exchange.send(end_message, routing_key=routing_key)
-                print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message to filter_by_amount worker {i} via topic exchange", flush=True)
-            
-            # Send END to categorizer_q3 for each semester
-            for semester_key in SEMESTER_KEYS_FOR_FANOUT:
-                end_message, _ = build_message(client_id, type_of_message, 1, [])
-                categorizer_q3_topic_exchange.send(end_message, routing_key=semester_key)
-                print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message to categorizer_q3 for {semester_key} via topic exchange", flush=True)
-        except Exception as e:
-            print(f"[filter_by_hour] Worker {WORKER_INDEX} ERROR sending END message: {e}", flush=True)
-            import traceback
-            traceback.print_exc()
+        end_messages_received += 1
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} received END message {end_messages_received}/{NUMBER_OF_YEAR_WORKERS} from filter_by_year", flush=True)
         
-        should_stop.set()
+        if end_messages_received >= NUMBER_OF_YEAR_WORKERS:
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} received all END messages from filter_by_year workers. FINAL STATS: received={rows_received} rows, sent_to_amount={rows_sent_to_amount}, sent_to_q3={rows_sent_to_q3}", flush=True)
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} about to send END message", flush=True)
+            try:
+                # Send END to filter_by_amount (to all workers)
+                end_message, _ = build_message(client_id, type_of_message, 1, [])
+                for i in range(NUMBER_OF_AMOUNT_WORKERS):
+                    routing_key = f"transaction.{i}"
+                    filter_by_amount_exchange.send(end_message, routing_key=routing_key)
+                    print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message to filter_by_amount worker {i} via topic exchange", flush=True)
+                
+                # Send END to categorizer_q3 via fanout exchange (reaches all workers)
+                end_message, _ = build_message(client_id, type_of_message, 1, [])
+                categorizer_q3_fanout_exchange.send(end_message)
+                print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message to categorizer_q3 via fanout exchange", flush=True)
+            except Exception as e:
+                print(f"[filter_by_hour] Worker {WORKER_INDEX} ERROR sending END message: {e}", flush=True)
+                import traceback
+                traceback.print_exc()
+            
+            should_stop.set()
 
 
-def make_on_message_callback(filter_by_amount_exchange, categorizer_q3_topic_exchange, should_stop):
+def make_on_message_callback(filter_by_amount_exchange, categorizer_q3_topic_exchange, categorizer_q3_fanout_exchange, should_stop):
     def wrapper(message: bytes):
-        on_message_callback(message, filter_by_amount_exchange, categorizer_q3_topic_exchange, should_stop)
+        on_message_callback(message, filter_by_amount_exchange, categorizer_q3_topic_exchange, categorizer_q3_fanout_exchange, should_stop)
     return wrapper
 
 def main():
@@ -201,13 +207,23 @@ def main():
         )
         print(f"[filter_by_hour] Worker {WORKER_INDEX} connected to categorizer_q3 topic exchange: {CATEGORIZER_Q3_EXCHANGE}")
         
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} creating categorizer_q3 fanout exchange connection...")
+        # Connect to categorizer_q3 fanout exchange for END messages
+        categorizer_q3_fanout_exchange = MessageMiddlewareExchange(
+            RABBITMQ_HOST,
+            exchange_name=CATEGORIZER_Q3_FANOUT_EXCHANGE,
+            exchange_type='fanout',
+            queue_name=""  # Empty queue since we're only sending, not consuming
+        )
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} connected to categorizer_q3 fanout exchange: {CATEGORIZER_Q3_FANOUT_EXCHANGE}")
+        
         print(f"[filter_by_hour] Worker {WORKER_INDEX} listening for transactions on exchange: {RECEIVER_EXCHANGE} with routing key: hour.{WORKER_INDEX}", flush=True)
         
         # Flag to coordinate stopping
         should_stop = threading.Event()
         
         # Start consuming from topic exchange (blocking)
-        topic_callback = make_on_message_callback(filter_by_amount_exchange, categorizer_q3_topic_exchange, should_stop)
+        topic_callback = make_on_message_callback(filter_by_amount_exchange, categorizer_q3_topic_exchange, categorizer_q3_fanout_exchange, should_stop)
         topic_middleware.start_consuming(topic_callback)
         
         print(f"[filter_by_hour] Worker {WORKER_INDEX} topic consuming finished", flush=True)
@@ -236,6 +252,10 @@ def main():
             categorizer_q3_topic_exchange.close()
         except Exception as e:
             print(f"[filter_by_hour] Worker {WORKER_INDEX} error closing categorizer_q3_topic_exchange: {e}", file=sys.stderr)
+        try:
+            categorizer_q3_fanout_exchange.close()
+        except Exception as e:
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} error closing categorizer_q3_fanout_exchange: {e}", file=sys.stderr)
 
 if __name__ == "__main__":
     print(f"[filter_by_hour] Worker {WORKER_INDEX} script starting - __name__ == '__main__'", flush=True)

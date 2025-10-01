@@ -9,6 +9,7 @@ services:
     environment:
       - QUERY_1_TOTAL_WORKERS=3
       - QUERY_3_TOTAL_WORKERS=2
+      - NUMBER_OF_YEAR_WORKERS=3
     ports:
       - "5000:5000"
     depends_on:
@@ -24,6 +25,7 @@ services:
     environment:
       - RABBITMQ_HOST=rabbitmq_server
       - RECEIVER_EXCHANGE=categorizer_q3_exchange
+      - FANOUT_EXCHANGE=categorizer_q3_fanout_exchange
       - WORKER_INDEX=0
       - GATEWAY_QUEUE=query3_result_receiver_queue
       - NUMBER_OF_HOUR_WORKERS=3
@@ -40,6 +42,7 @@ services:
     environment:
       - RABBITMQ_HOST=rabbitmq_server
       - RECEIVER_EXCHANGE=categorizer_q3_exchange
+      - FANOUT_EXCHANGE=categorizer_q3_fanout_exchange
       - WORKER_INDEX=1
       - GATEWAY_QUEUE=query3_result_receiver_queue
       - NUMBER_OF_HOUR_WORKERS=3
@@ -70,17 +73,67 @@ services:
       timeout: 10s
       retries: 5
 
-  filter_by_year_worker:
+  filter_by_year_worker_0:
     build:
       context: .
       dockerfile: workers/filter_by_year/Dockerfile
-    container_name: filter_by_year_worker
+    container_name: filter_by_year_worker_0
     environment:
       - RABBITMQ_HOST=rabbitmq_server
-      - QUEUE_T=filter_by_year_transactions_queue
-      - QUEUE_T_ITEMS=filter_by_year_transaction_items_queue
+      - RECEIVER_EXCHANGE_T=filter_by_year_transactions_exchange
+      - RECEIVER_EXCHANGE_T_ITEMS=filter_by_year_transaction_items_exchange
+      - WORKER_INDEX=0
       - HOUR_FILTER_EXCHANGE=filter_by_hour_exchange
       - NUMBER_OF_HOUR_WORKERS=3
+      - NUMBER_OF_YEAR_WORKERS=3
+      - ITEM_CATEGORIZER_QUEUE=categorizer_q2_receiver_queue
+      - STORE_USER_CATEGORIZER_QUEUE=store_user_categorizer_queue
+      - FILTER_YEAR=2024,2025
+      - TOPIC_EXCHANGE=categorizer_q2_topic_exchange
+      - FANOUT_EXCHANGE=categorizer_q2_fanout_exchange
+      - CATEGORIZER_Q4_TOPIC_EXCHANGE=categorizer_q4_topic_exchange
+      - CATEGORIZER_Q4_FANOUT_EXCHANGE=categorizer_q4_fanout_exchange
+      - CATEGORIZER_Q4_WORKERS=3
+    depends_on:
+      - rabbitmq_server
+
+  filter_by_year_worker_1:
+    build:
+      context: .
+      dockerfile: workers/filter_by_year/Dockerfile
+    container_name: filter_by_year_worker_1
+    environment:
+      - RABBITMQ_HOST=rabbitmq_server
+      - RECEIVER_EXCHANGE_T=filter_by_year_transactions_exchange
+      - RECEIVER_EXCHANGE_T_ITEMS=filter_by_year_transaction_items_exchange
+      - WORKER_INDEX=1
+      - HOUR_FILTER_EXCHANGE=filter_by_hour_exchange
+      - NUMBER_OF_HOUR_WORKERS=3
+      - NUMBER_OF_YEAR_WORKERS=3
+      - ITEM_CATEGORIZER_QUEUE=categorizer_q2_receiver_queue
+      - STORE_USER_CATEGORIZER_QUEUE=store_user_categorizer_queue
+      - FILTER_YEAR=2024,2025
+      - TOPIC_EXCHANGE=categorizer_q2_topic_exchange
+      - FANOUT_EXCHANGE=categorizer_q2_fanout_exchange
+      - CATEGORIZER_Q4_TOPIC_EXCHANGE=categorizer_q4_topic_exchange
+      - CATEGORIZER_Q4_FANOUT_EXCHANGE=categorizer_q4_fanout_exchange
+      - CATEGORIZER_Q4_WORKERS=3
+    depends_on:
+      - rabbitmq_server
+
+  filter_by_year_worker_2:
+    build:
+      context: .
+      dockerfile: workers/filter_by_year/Dockerfile
+    container_name: filter_by_year_worker_2
+    environment:
+      - RABBITMQ_HOST=rabbitmq_server
+      - RECEIVER_EXCHANGE_T=filter_by_year_transactions_exchange
+      - RECEIVER_EXCHANGE_T_ITEMS=filter_by_year_transaction_items_exchange
+      - WORKER_INDEX=2
+      - HOUR_FILTER_EXCHANGE=filter_by_hour_exchange
+      - NUMBER_OF_HOUR_WORKERS=3
+      - NUMBER_OF_YEAR_WORKERS=3
       - ITEM_CATEGORIZER_QUEUE=categorizer_q2_receiver_queue
       - STORE_USER_CATEGORIZER_QUEUE=store_user_categorizer_queue
       - FILTER_YEAR=2024,2025
@@ -105,8 +158,10 @@ services:
       - END_HOUR=11
       - FILTER_BY_AMOUNT_EXCHANGE=filter_by_amount_exchange
       - CATEGORIZER_Q3_EXCHANGE=categorizer_q3_exchange
+      - CATEGORIZER_Q3_FANOUT_EXCHANGE=categorizer_q3_fanout_exchange
       - NUMBER_OF_AMOUNT_WORKERS=3
       - NUMBER_OF_HOUR_WORKERS=3
+      - NUMBER_OF_YEAR_WORKERS=3
     depends_on:
       - rabbitmq_server
 
@@ -123,8 +178,10 @@ services:
       - END_HOUR=11
       - FILTER_BY_AMOUNT_EXCHANGE=filter_by_amount_exchange
       - CATEGORIZER_Q3_EXCHANGE=categorizer_q3_exchange
+      - CATEGORIZER_Q3_FANOUT_EXCHANGE=categorizer_q3_fanout_exchange
       - NUMBER_OF_AMOUNT_WORKERS=3
       - NUMBER_OF_HOUR_WORKERS=3
+      - NUMBER_OF_YEAR_WORKERS=3
     depends_on:
       - rabbitmq_server
 
@@ -141,8 +198,10 @@ services:
       - END_HOUR=11
       - FILTER_BY_AMOUNT_EXCHANGE=filter_by_amount_exchange
       - CATEGORIZER_Q3_EXCHANGE=categorizer_q3_exchange
+      - CATEGORIZER_Q3_FANOUT_EXCHANGE=categorizer_q3_fanout_exchange
       - NUMBER_OF_AMOUNT_WORKERS=3
       - NUMBER_OF_HOUR_WORKERS=3
+      - NUMBER_OF_YEAR_WORKERS=3
     depends_on:
       - rabbitmq_server
 
@@ -206,6 +265,7 @@ services:
       - ITEMS_FANOUT_EXCHANGE=categorizer_q2_items_fanout_exchange
       - WORKER_INDEX=0
       - TOTAL_WORKERS=3
+      - NUMBER_OF_YEAR_WORKERS=3
     depends_on:
       - rabbitmq_server
       - gateway
@@ -225,6 +285,7 @@ services:
       - ITEMS_FANOUT_EXCHANGE=categorizer_q2_items_fanout_exchange
       - WORKER_INDEX=1
       - TOTAL_WORKERS=3
+      - NUMBER_OF_YEAR_WORKERS=3
     depends_on:
       - rabbitmq_server
       - gateway
@@ -244,6 +305,7 @@ services:
       - ITEMS_FANOUT_EXCHANGE=categorizer_q2_items_fanout_exchange
       - WORKER_INDEX=2
       - TOTAL_WORKERS=3
+      - NUMBER_OF_YEAR_WORKERS=3
     depends_on:
       - rabbitmq_server
       - gateway
@@ -289,6 +351,7 @@ services:
       - WORKER_INDEX=0
       - AMOUNT_OF_WORKERS=3
       - BIRTHDAY_DICT_QUEUE=birthday_dictionary_queue
+      - NUMBER_OF_YEAR_WORKERS=3
     depends_on:
       - rabbitmq_server
       - gateway
@@ -306,6 +369,7 @@ services:
       - WORKER_INDEX=1
       - AMOUNT_OF_WORKERS=3
       - BIRTHDAY_DICT_QUEUE=birthday_dictionary_queue
+      - NUMBER_OF_YEAR_WORKERS=3
     depends_on:
       - rabbitmq_server
       - gateway
@@ -323,6 +387,7 @@ services:
       - WORKER_INDEX=2
       - AMOUNT_OF_WORKERS=3
       - BIRTHDAY_DICT_QUEUE=birthday_dictionary_queue
+      - NUMBER_OF_YEAR_WORKERS=3
     depends_on:
       - rabbitmq_server
       - gateway

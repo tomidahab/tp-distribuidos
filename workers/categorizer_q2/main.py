@@ -26,6 +26,7 @@ FANOUT_EXCHANGE = os.environ.get('FANOUT_EXCHANGE', 'categorizer_q2_fanout_excha
 ITEMS_FANOUT_EXCHANGE = os.environ.get('ITEMS_FANOUT_EXCHANGE', 'categorizer_q2_items_fanout_exchange')
 WORKER_INDEX = int(os.environ.get('WORKER_INDEX', 0))
 TOTAL_WORKERS = int(os.environ.get('TOTAL_WORKERS', 1))
+NUMBER_OF_YEAR_WORKERS = int(os.environ.get('NUMBER_OF_YEAR_WORKERS', '3'))
 
 def get_months_for_worker(worker_index, total_workers):
     months = list(range(1, 13))
@@ -110,6 +111,8 @@ def listen_for_items():
 def listen_for_sales(items, topic_middleware):
     # Dictionary: {(item_id, month): {'count': int, 'sum': float}}
     sales_stats = defaultdict(lambda: {'count': int(0), 'sum': float(0.0)})
+    end_messages_received = 0
+    
     try:
         print(f"[categorizer_q2] Using topic middleware for queue: {topic_middleware.queue_name}")
         queue = topic_middleware
@@ -119,6 +122,7 @@ def listen_for_sales(items, topic_middleware):
         return sales_stats
 
     def on_message_callback(message: bytes):
+        nonlocal end_messages_received
         try:
             parsed_message = parse_message(message)
             type_of_message = parsed_message['csv_type']  
@@ -139,9 +143,13 @@ def listen_for_sales(items, topic_middleware):
                     sales_stats[key]['count'] = int(sales_stats[key]['count']) + 1
                     sales_stats[key]['sum'] = float(sales_stats[key]['sum']) + price
                     # print(f"[categorizer_q2] Updated stats for {key}: {sales_stats[key]}")  # Too verbose
+            
             if is_last:
-                print("[categorizer_q2] Received end message, stopping sales collection.")
-                queue.stop_consuming()
+                end_messages_received += 1
+                print(f"[categorizer_q2] Received END message {end_messages_received}/{NUMBER_OF_YEAR_WORKERS} from filter_by_year workers")
+                if end_messages_received >= NUMBER_OF_YEAR_WORKERS:
+                    print(f"[categorizer_q2] Received all END messages from {NUMBER_OF_YEAR_WORKERS} filter_by_year workers, stopping sales collection.")
+                    queue.stop_consuming()
         except Exception as e:
             print(f"[categorizer_q2] Error processing sales message: {e}", file=sys.stderr)
 
