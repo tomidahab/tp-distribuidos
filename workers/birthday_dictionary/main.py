@@ -18,22 +18,31 @@ def listen_for_top_users():
     queue = MessageMiddlewareQueue(RABBITMQ_HOST, RECEIVER_QUEUE)
     print(f"[birthday_dictionary] Listening for top users on queue: {RECEIVER_QUEUE}")
 
-    # Get the number of categorizer_q4 workers from env
     end_messages_received = 0
+
+    def normalize_user_id(user_id):
+        # Remove trailing .0 if present and always use string
+        if isinstance(user_id, float):
+            user_id = int(user_id)
+        user_id = str(user_id)
+        if user_id.endswith('.0'):
+            user_id = user_id[:-2]
+        return user_id
 
     def on_message_callback(message: bytes):
         nonlocal end_messages_received
         parsed_message = parse_message(message)
         top_users = []
-        print(f"[birthday_dictionary] Received message with {len(parsed_message['rows'])} rows, is_last={parsed_message['is_last']}")
+        # print(f"[birthday_dictionary] Received message with {len(parsed_message['rows'])} rows, is_last={parsed_message['is_last']}")
         for row in parsed_message['rows']:
             parts = row.split(',')
             if len(parts) == 3:
                 store_id, user_id, count = parts
+                user_id = normalize_user_id(user_id)
                 top_users.append({'store_id': store_id, 'user_id': user_id, 'count': int(count)})
                 user_ids.add(user_id)
         messages.append({'top_users': top_users, 'is_last': parsed_message['is_last']})
-        print(f"[birthday_dictionary] message processed, total messages: {len(messages)}, unique user_ids: {len(user_ids)}")
+        # print(f"[birthday_dictionary] message processed, total messages: {len(messages)}, unique user_ids: {len(user_ids)}")
         if parsed_message['is_last']:
             end_messages_received += 1
             print(f"[birthday_dictionary] Received end message {end_messages_received}/{CATEGORIZER_Q4_WORKERS} from categorizer_q4 workers.")
@@ -64,14 +73,22 @@ def listen_for_client_data(user_ids):
     queue = MessageMiddlewareQueue(RABBITMQ_HOST, GATEWAY_CLIENT_DATA_QUEUE)
     print(f"[birthday_dictionary] Listening for client data on queue: {GATEWAY_CLIENT_DATA_QUEUE}")
 
+    def normalize_user_id(user_id):
+        if isinstance(user_id, float):
+            user_id = int(user_id)
+        user_id = str(user_id)
+        if user_id.endswith('.0'):
+            user_id = user_id[:-2]
+        return user_id
+
     def on_message_callback(message: bytes):
         parsed_message = parse_message(message)
         for row in parsed_message['rows']:
             parts = row.split(',')
-            if len(parts) == 2:
-                client_id, birthday = parts
-                if client_id in user_ids:
-                    client_birthdays[client_id] = birthday
+            client_id, birthday = parts
+            client_id = normalize_user_id(client_id)
+            if client_id in user_ids:
+                client_birthdays[client_id] = birthday
         if parsed_message['is_last']:
             print("[birthday_dictionary] Received end message, stopping client data collection.")
             queue.stop_consuming()

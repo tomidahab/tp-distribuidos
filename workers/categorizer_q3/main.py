@@ -79,17 +79,17 @@ def listen_for_transactions():
 
     def on_message_callback(message: bytes):
         nonlocal end_messages_received  # Allow modification of the outer variable
-        print(f"[categorizer_q3] Worker {WORKER_INDEX} received a message!", flush=True)
+        # print(f"[categorizer_q3] Worker {WORKER_INDEX} received a message!", flush=True)
         try:
             parsed_message = parse_message(message)
             type_of_message = parsed_message['csv_type']  
             client_id = parsed_message['client_id']
             is_last = parsed_message['is_last']
             
-            print(f"[categorizer_q3] Message details - is_last: {is_last}, rows: {len(parsed_message['rows'])}", flush=True)
+            # print(f"[categorizer_q3] Message details - is_last: {is_last}, rows: {len(parsed_message['rows'])}", flush=True)
 
             for row in parsed_message['rows']:
-                print(f"[categorizer_q3] Processing row: {row}, is_last={is_last}", flush=True)
+                # print(f"[categorizer_q3] Processing row: {row}, is_last={is_last}", flush=True)
                 dic_fields_row = row_to_dict(row, type_of_message)
                 
                 # Extract transaction data
@@ -100,9 +100,6 @@ def listen_for_transactions():
                 semester = get_semester(month)
                 store_id = str(dic_fields_row['store_id'])
                 payment_value = float(dic_fields_row.get('final_amount', 0.0))
-                if payment_value == 0.0:
-                    print(f"[categorizer_q3] Warning: Payment value is 0.0 for row: {row}", file=sys.stderr)
-                
                 key = (year, semester, store_id)
                 semester_store_stats[key] += payment_value
                 
@@ -118,7 +115,6 @@ def listen_for_transactions():
     try:
         print("[categorizer_q3] Starting to consume messages...", flush=True)
         topic_middleware.start_consuming(on_message_callback)
-        print("[categorizer_q3] start_consuming finished unexpectedly", flush=True)
     except MessageMiddlewareDisconnectedError:
         print("[categorizer_q3] Disconnected from middleware.", file=sys.stderr)
     except MessageMiddlewareMessageError:
@@ -127,21 +123,18 @@ def listen_for_transactions():
         print(f"[categorizer_q3] Unexpected error while consuming: {e}", file=sys.stderr)
     finally:
         topic_middleware.close()
-        # fanout_middleware.close()
     return semester_store_stats
 
 def send_results_to_gateway(semester_store_stats):
     try:
         queue = MessageMiddlewareQueue(RABBITMQ_HOST, GATEWAY_QUEUE)
         
-        # Convert to CSV format like Q1
         csv_lines = []
         for (year, semester, store_id), total_payment in semester_store_stats.items():
             csv_line = f"{year},{semester},{store_id},{total_payment}"
             csv_lines.append(csv_line)
             
-        # Send as Q1-style message with rows and is_last=1
-        message, _ = build_message(0, 3, 1, csv_lines)  # client_id=0, csv_type=3, is_last=1 (final message)
+        message, _ = build_message(0, 3, 1, csv_lines)
         queue.send(message)
         print(f"[categorizer_q3] Sent {len(csv_lines)} results to gateway in batch")
             

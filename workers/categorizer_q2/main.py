@@ -127,7 +127,7 @@ def listen_for_sales(items, topic_middleware):
             parsed_message = parse_message(message)
             type_of_message = parsed_message['csv_type']  
             is_last = parsed_message['is_last']
-            print(f"[categorizer_q2] Received transaction message, csv_type: {type_of_message}, is_last: {is_last}, rows: {len(parsed_message['rows'])}")
+            # print(f"[categorizer_q2] Received transaction message, csv_type: {type_of_message}, is_last: {is_last}, rows: {len(parsed_message['rows'])}")
             
             for row in parsed_message['rows']:
                 dic_fields_row = row_to_dict(row, type_of_message)
@@ -186,7 +186,6 @@ def get_top_products_per_year_month(sales_stats, items):
 def send_results_to_gateway(results):
     try:
         queue = MessageMiddlewareQueue(RABBITMQ_HOST, GATEWAY_QUEUE)
-        # Send all results with is_last=1 using build_message format
         message, _ = build_message(0, 2, 1, results)  # csv_type=2 for Q2
         queue.send(message)
         print(f"[categorizer_q2] Worker {WORKER_INDEX} sent {len(results)} results to gateway with is_last=1")

@@ -42,7 +42,7 @@ def listen_for_transactions():
         parsed_message = parse_message(message)
         type_of_message = parsed_message['csv_type']
         is_last = parsed_message['is_last']
-        print(f"[categorizer_q4] Received message with {len(parsed_message['rows'])} rows, is_last={is_last}")
+        # print(f"[categorizer_q4] Received message with {len(parsed_message['rows'])} rows, is_last={is_last}")
         for row in parsed_message['rows']:
             dic_fields_row = row_to_dict(row, type_of_message)
             store_id = dic_fields_row.get('store_id')

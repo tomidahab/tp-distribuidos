@@ -82,7 +82,7 @@ def handle_and_forward_chunk(client_id: int, csv_type: int, is_last: int, chunk:
                     routing_key = f"year.{worker_index}"
                     filter_by_year_transaction_items_exchange.send(message, routing_key=routing_key)
                     transaction_items_worker_counter += 1
-                    print(f"[gateway_protocol] Sent transaction_items to worker {worker_index} with routing key {routing_key}", flush=True)
+                    # print(f"[gateway_protocol] Sent transaction_items to worker {worker_index} with routing key {routing_key}", flush=True)
                     break
                 except Exception as e:
                     print(f"[gateway_protocol] Retry {attempt+1}/{MAX_RETRIES} for transaction_items exchange: {e}", file=sys.stderr)
