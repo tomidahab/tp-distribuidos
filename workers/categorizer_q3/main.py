@@ -25,6 +25,7 @@ RECEIVER_EXCHANGE = os.environ.get('RECEIVER_EXCHANGE', 'categorizer_q3_exchange
 FANOUT_EXCHANGE = f"{RECEIVER_EXCHANGE}_fanout"
 WORKER_INDEX = int(os.environ.get('WORKER_INDEX', '0'))
 GATEWAY_QUEUE = os.environ.get('GATEWAY_QUEUE', 'query3_result_receiver_queue')
+NUMBER_OF_HOUR_WORKERS = int(os.environ.get('NUMBER_OF_HOUR_WORKERS', '3'))
 
 # Define semester mapping for worker distribution
 SEMESTER_MAPPING = {
@@ -38,6 +39,7 @@ def get_semester(month):
 def listen_for_transactions():
     # Agregación: {(year, semester, store_id): total_payment}
     semester_store_stats = defaultdict(float)
+    end_messages_received = 0
     
     # Get routing keys for this worker
     worker_routing_keys = SEMESTER_MAPPING.get(WORKER_INDEX, [])
@@ -76,6 +78,7 @@ def listen_for_transactions():
     print(f"[categorizer_q3] Worker {WORKER_INDEX} listening for transactions on exchange: {RECEIVER_EXCHANGE} with routing keys: {worker_routing_keys}")
 
     def on_message_callback(message: bytes):
+        nonlocal end_messages_received  # Allow modification of the outer variable
         print(f"[categorizer_q3] Worker {WORKER_INDEX} received a message!", flush=True)
         try:
             parsed_message = parse_message(message)
@@ -104,8 +107,11 @@ def listen_for_transactions():
                 semester_store_stats[key] += payment_value
                 
             if is_last:
-                print("[categorizer_q3] Received end message, stopping transaction collection.")
-                topic_middleware.stop_consuming()
+                end_messages_received += 1
+                print(f"[categorizer_q3] Worker {WORKER_INDEX} received END message {end_messages_received}/{NUMBER_OF_HOUR_WORKERS}")
+                if end_messages_received >= NUMBER_OF_HOUR_WORKERS:
+                    print(f"[categorizer_q3] Worker {WORKER_INDEX} received all END messages, stopping transaction collection.")
+                    topic_middleware.stop_consuming()
         except Exception as e:
             print(f"[categorizer_q3] Error processing transaction message: {e}", file=sys.stderr)
 

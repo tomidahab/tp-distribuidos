@@ -12,7 +12,8 @@ from collections import defaultdict
 RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', os.environ.get('rabbitmq_server_HOST', 'rabbitmq_server'))
 QUEUE_T_ITEMS = os.environ.get('QUEUE_T_ITEMS', 'filter_by_year_transaction_items_queue')
 QUEUE_T = os.environ.get('QUEUE_T', 'filter_by_year_transactions_queue')
-HOUR_FILTER_QUEUE = os.environ.get('HOUR_FILTER_QUEUE', 'filter_by_hour_queue')
+HOUR_FILTER_EXCHANGE = os.environ.get('HOUR_FILTER_EXCHANGE', 'filter_by_hour_exchange')
+NUMBER_OF_HOUR_WORKERS = int(os.environ.get('NUMBER_OF_HOUR_WORKERS', '3'))
 ITEM_CATEGORIZER_QUEUE = os.environ.get('ITEM_CATEGORIZER_QUEUE', 'categorizer_q2_receiver_queue')
 FILTER_YEARS = [
     int(y.strip()) for y in os.environ.get('FILTER_YEAR', '2024,2025').split(',')
@@ -27,7 +28,7 @@ CATEGORIZER_Q4_WORKERS = int(os.environ.get('CATEGORIZER_Q4_WORKERS', 3))
 print(f"[filter_by_year] Starting with FILTER_YEARS: {FILTER_YEARS}")
 
 
-def on_message_callback_transactions(message: bytes, hour_filter_queue, categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange):
+def on_message_callback_transactions(message: bytes, hour_filter_exchange, categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange):
     try:
         parsed_message = parse_message(message)
         type_of_message = parsed_message['csv_type']  
@@ -46,16 +47,25 @@ def on_message_callback_transactions(message: bytes, hour_filter_queue, categori
 
         if new_rows or is_last: 
             if is_last:
-                print(f"[worker] Number of rows on the message passed year filter: {len(new_rows)}, is_last={is_last}")
-            new_message, _ = build_message(client_id, type_of_message, is_last, new_rows)
-            hour_filter_queue.send(new_message)
-            #for row in new_rows:
-                #dic_fields_row = row_to_dict(row, type_of_message)
-                #store_id = int(dic_fields_row['store_id'])
-                #routing_key = f"store.{store_id % CATEGORIZER_Q4_WORKERS}"
-                #q4_message, _ = build_message(client_id, type_of_message, 0, [row])
-                #categorizer_q4_topic_exchange.send(q4_message, routing_key=routing_key)
+                print(f"[filter_by_year] Number of rows on the message passed year filter: {len(new_rows)}, is_last={is_last}")
+            
+            # Send to filter_by_hour workers using round robin
+            if new_rows:
+                # Group rows by worker to send in batches instead of one by one
+                rows_by_worker = defaultdict(list)
+                for i, row in enumerate(new_rows):
+                    worker_index = i % NUMBER_OF_HOUR_WORKERS  # Simple round robin by row index
+                    routing_key = f"hour.{worker_index}"
+                    rows_by_worker[routing_key].append(row)
+                
+                # Send batched messages to each worker
+                for routing_key, worker_rows in rows_by_worker.items():
+                    if worker_rows:
+                        new_message, _ = build_message(client_id, type_of_message, 0, worker_rows)
+                        hour_filter_exchange.send(new_message, routing_key=routing_key)
+                        print(f"[filter_by_year] Sent {len(worker_rows)} rows to filter_by_hour {routing_key}", flush=True)
 
+            # Send to categorizer_q4 workers  
             batches = defaultdict(list)
             for row in new_rows:
                 dic_fields_row = row_to_dict(row, type_of_message)
@@ -69,12 +79,17 @@ def on_message_callback_transactions(message: bytes, hour_filter_queue, categori
                     print(f"[filter_by_year] Sending {len(batch_rows)} rows to categorizer_q4 with routing key {routing_key}")
                     categorizer_q4_topic_exchange.send(q4_message, routing_key=routing_key)
 
-        #if is_last:
-            #end_message, _ = build_message(client_id, type_of_message, 1, [])
-            #hour_filter_queue.send(end_message)
-            #print("[filter_by_year] Sent END message to hour filter queue.")
-            #categorizer_q4_fanout_exchange.send(end_message)
-            #print("[filter_by_year] Sent END message to categorizer_q4 via fanout exchange.")
+        if is_last:
+            # Send END message to all filter_by_hour workers
+            end_message, _ = build_message(client_id, type_of_message, 1, [])
+            for i in range(NUMBER_OF_HOUR_WORKERS):
+                routing_key = f"hour.{i}"
+                hour_filter_exchange.send(end_message, routing_key=routing_key)
+                print(f"[filter_by_year] Sent END message to filter_by_hour worker {i} via topic exchange", flush=True)
+            
+            # Send END message to categorizer_q4 via fanout exchange
+            categorizer_q4_fanout_exchange.send(end_message)
+            print("[filter_by_year] Sent END message to categorizer_q4 via fanout exchange.")
 
     except Exception as e:
         print(f"[transactions] Error decoding message: {e}", file=sys.stderr)
@@ -112,10 +127,10 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
     except Exception as e:
         print(f"[t_items] Error decoding message: {e}", file=sys.stderr)
 
-def consume_queue_transactions(queue, callback, hour_filter_queue, categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange):
+def consume_queue_transactions(queue, callback, hour_filter_exchange, categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange):
     print("[filter_by_year] Starting to consume transactions queue...")
     def wrapper(message):
-        callback(message, hour_filter_queue, categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange)
+        callback(message, hour_filter_exchange, categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange)
     try:
         queue.start_consuming(wrapper)
     except MessageMiddlewareDisconnectedError:
@@ -150,8 +165,13 @@ def main():
         queue_t_items = MessageMiddlewareQueue(RABBITMQ_HOST, QUEUE_T_ITEMS)
         print(f"[filter_by_year] Connected to transaction_items queue: {QUEUE_T_ITEMS}")
         
-        hour_filter_queue = MessageMiddlewareQueue(RABBITMQ_HOST, HOUR_FILTER_QUEUE)
-        print(f"[filter_by_year] Connected to hour filter queue: {HOUR_FILTER_QUEUE}")
+        hour_filter_exchange = MessageMiddlewareExchange(
+            host=RABBITMQ_HOST,
+            exchange_name=HOUR_FILTER_EXCHANGE,
+            exchange_type='topic',
+            queue_name="",  # Empty since we're only sending
+        )
+        print(f"[filter_by_year] Connected to hour filter exchange: {HOUR_FILTER_EXCHANGE}")
 
         item_categorizer_exchange = MessageMiddlewareExchange(
             host=RABBITMQ_HOST,
@@ -178,22 +198,21 @@ def main():
         )
         print(f"[filter_by_year] Connected to categorizer_q4 topic exchange: {CATEGORIZER_Q4_TOPIC_EXCHANGE}")
         
-        # categorizer_q4_fanout_exchange = MessageMiddlewareExchange(
-        #     host=RABBITMQ_HOST,
-        #     exchange_name=CATEGORIZER_Q4_FANOUT_EXCHANGE,
-        #     exchange_type='fanout',
-        #     queue_name='', 
-        # )
-        # print(f"[filter_by_year] Connected to categorizer_q4 fanout exchange: {CATEGORIZER_Q4_FANOUT_EXCHANGE}")
+        categorizer_q4_fanout_exchange = MessageMiddlewareExchange(
+            host=RABBITMQ_HOST,
+            exchange_name=CATEGORIZER_Q4_FANOUT_EXCHANGE,
+            exchange_type='fanout',
+            queue_name='', 
+        )
+        print(f"[filter_by_year] Connected to categorizer_q4 fanout exchange: {CATEGORIZER_Q4_FANOUT_EXCHANGE}")
         
     except Exception as e:
         print(f"[filter_by_year] Error connecting to RabbitMQ: {e}", file=sys.stderr)
         return
 
     print("[filter_by_year] Starting consumer threads...")
-    categorizer_q4_fanout_exchange=""
-    categorizer_q4_topic_exchange =""
-    t1 = threading.Thread(target=consume_queue_transactions, args=(queue_t, on_message_callback_transactions, hour_filter_queue, categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange))
+    # Note: Using the actual exchange objects, not empty strings
+    t1 = threading.Thread(target=consume_queue_transactions, args=(queue_t, on_message_callback_transactions, hour_filter_exchange, categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange))
     t2 = threading.Thread(
         target=consume_queue_t_items,
         args=(queue_t_items, on_message_callback_t_items, item_categorizer_exchange, item_categorizer_fanout_exchange)
@@ -214,7 +233,9 @@ def main():
         queue_t_items.stop_consuming()
         queue_t.close()
         queue_t_items.close()
-        hour_filter_queue.close()
+        hour_filter_exchange.close()
+        categorizer_q4_topic_exchange.close()
+        categorizer_q4_fanout_exchange.close()
 
 if __name__ == "__main__":
     main()
