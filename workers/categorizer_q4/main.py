@@ -48,7 +48,7 @@ def listen_for_transactions():
             store_id = dic_fields_row.get('store_id')
             user_id = dic_fields_row.get('user_id')
             if None not in (store_id, user_id) and store_id != '' and user_id != '':
-                store_user_counter[store_id][user_id] += 1
+                store_user_counter[store_id][int(float(user_id))] += 1
         
         if is_last:
             end_messages_received += 1
