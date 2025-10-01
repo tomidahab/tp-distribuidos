@@ -269,6 +269,8 @@ class Gateway:
                 os.remove(RESULT_Q2_FILE)
             if os.path.exists(RESULT_Q3_FILE):
                 os.remove(RESULT_Q3_FILE)
+            if os.path.exists(RESULT_Q4_FILE):
+                os.remove(RESULT_Q4_FILE)
         except Exception as e:
             logging.error(f"Error eliminando archivos temporales: {e}")
 
