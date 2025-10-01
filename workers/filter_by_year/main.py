@@ -16,6 +16,7 @@ WORKER_INDEX = int(os.environ.get('WORKER_INDEX', '0'))
 HOUR_FILTER_EXCHANGE = os.environ.get('HOUR_FILTER_EXCHANGE', 'filter_by_hour_exchange')
 NUMBER_OF_HOUR_WORKERS = int(os.environ.get('NUMBER_OF_HOUR_WORKERS', '3'))
 NUMBER_OF_YEAR_WORKERS = int(os.environ.get('NUMBER_OF_YEAR_WORKERS', '3'))
+NUMBER_OF_Q2_CATEGORIZER_WORKERS = int(os.environ.get('NUMBER_OF_Q2_CATEGORIZER_WORKERS', '3'))
 ITEM_CATEGORIZER_QUEUE = os.environ.get('ITEM_CATEGORIZER_QUEUE', 'categorizer_q2_receiver_queue')
 FILTER_YEARS = [
     int(y.strip()) for y in os.environ.get('FILTER_YEAR', '2024,2025').split(',')
@@ -129,8 +130,10 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
 
         if is_last == 1:
             end_message, _ = build_message(client_id, type_of_message, is_last, [])
-            item_categorizer_fanout_exchange.send(end_message)
-            print(f"[filter_by_year] Worker {WORKER_INDEX} Sent END message to categorizer_q2 via fanout exchange.")
+            for i in range(NUMBER_OF_Q2_CATEGORIZER_WORKERS):
+                routing_key = f"month.{i+1}"
+                item_categorizer_exchange.send(end_message, routing_key=routing_key)
+                print(f"[filter_by_year] Worker {WORKER_INDEX} Sent END message to categorizer_q2 with routing key {routing_key}.")
     except Exception as e:
         print(f"[t_items] Worker {WORKER_INDEX} Error decoding message: {e}", file=sys.stderr)
 
