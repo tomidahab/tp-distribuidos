@@ -186,10 +186,10 @@ def get_top_products_per_year_month(sales_stats, items):
 def send_results_to_gateway(results):
     try:
         queue = MessageMiddlewareQueue(RABBITMQ_HOST, GATEWAY_QUEUE)
-        # Send all results in a single message, is_last=1
-        message, _ = build_message(0, 4, 1, results)
+        # Send all results with is_last=1 using build_message format
+        message, _ = build_message(0, 2, 1, results)  # csv_type=2 for Q2
         queue.send(message)
-        print(f"[categorizer_q2] Sent {len(results)} results to gateway in a single message")
+        print(f"[categorizer_q2] Worker {WORKER_INDEX} sent {len(results)} results to gateway with is_last=1")
         queue.close()
     except Exception as e:
         print(f"[categorizer_q2] ERROR in send_results_to_gateway: {e}")

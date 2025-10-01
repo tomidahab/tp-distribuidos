@@ -29,6 +29,7 @@ RESULT_Q4_QUEUE = os.environ.get('RESULT_Q4_QUEUE', 'query4_answer_queue') # Mod
 RESULT_Q4_FILE = os.path.join(OUTPUT_DIR, 'result_q4.csv')
 
 QUERY_1_TOTAL_WORKERS = int(os.environ.get('QUERY_1_TOTAL_WORKERS', 3))
+QUERY_2_TOTAL_WORKERS = int(os.environ.get('QUERY_2_TOTAL_WORKERS', 3))
 QUERY_3_TOTAL_WORKERS = int(os.environ.get('QUERY_3_TOTAL_WORKERS', 2))
 
 QUERIES_TO_COMPLETE = 3
@@ -115,10 +116,11 @@ class Gateway:
         
         # Separate counters for each query
         q1_messages_received = 0
+        q2_messages_received = 0
         q3_messages_received = 0
         
         def on_message_callback(message: bytes):
-            nonlocal q1_messages_received, q3_messages_received
+            nonlocal q1_messages_received, q2_messages_received, q3_messages_received
             
             # Write message to result file (append mode)
             logging.info(f"[{result_queue}] Mensaje recibido en cola: {result_queue}")
@@ -130,6 +132,10 @@ class Gateway:
                 q1_messages_received += 1
                 logging.info(f"[{result_queue}] Received Q1 message {q1_messages_received} with {len(rows)} rows, is_last={parsed_message['is_last']}")
             
+            if result_queue == RESULT_Q2_QUEUE:
+                q2_messages_received += 1
+                logging.info(f"[{result_queue}] Received Q2 message {q2_messages_received} with {len(rows)} rows, is_last={parsed_message['is_last']}")
+            
             if result_queue == RESULT_Q3_QUEUE:
                 q3_messages_received += 1
                 logging.info(f"[{result_queue}] Received Q3 message {q3_messages_received} with {len(rows)} rows, is_last={parsed_message['is_last']}")
@@ -140,6 +146,10 @@ class Gateway:
             # Check completion using specific counter for each query
             if parsed_message['is_last'] and q1_messages_received == QUERY_1_TOTAL_WORKERS and result_queue == RESULT_Q1_QUEUE:
                 logging.info(f"[{result_queue}] Q1 completed: received {q1_messages_received}/{QUERY_1_TOTAL_WORKERS} is_last messages")
+                self.mark_query_completed(result_queue)
+
+            if parsed_message['is_last'] and q2_messages_received == QUERY_2_TOTAL_WORKERS and result_queue == RESULT_Q2_QUEUE:
+                logging.info(f"[{result_queue}] Q2 completed: received {q2_messages_received}/{QUERY_2_TOTAL_WORKERS} is_last messages")
                 self.mark_query_completed(result_queue)
 
             if parsed_message["is_last"] and q3_messages_received == QUERY_3_TOTAL_WORKERS and result_queue == RESULT_Q3_QUEUE:
@@ -243,7 +253,7 @@ class Gateway:
         # Start result queue listener thread
         q1_result_thread = threading.Thread(target=self.listen_queue_result, args=(RESULT_Q1_QUEUE, RESULT_Q1_FILE), daemon=True)
         q1_result_thread.start()
-        q2_result_thread = threading.Thread(target=self.listen_queue_result_dictionary, args=(RESULT_Q2_QUEUE, RESULT_Q2_FILE, 2), daemon=True)
+        q2_result_thread = threading.Thread(target=self.listen_queue_result, args=(RESULT_Q2_QUEUE, RESULT_Q2_FILE), daemon=True)
         q2_result_thread.start()
         q3_result_thread = threading.Thread(target=self.listen_queue_result, args=(RESULT_Q3_QUEUE, RESULT_Q3_FILE), daemon=True)
         q3_result_thread.start()
