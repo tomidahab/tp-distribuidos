@@ -59,7 +59,7 @@ class Gateway:
 
         def on_message_callback(message: bytes):
             # Write message to result_q1.csv (append mode)
-            logging.info(f"[{result_queue}] Mensaje recibido en cola: {message}")
+            # logging.info(f"[{result_queue}] Mensaje recibido en cola: {message}")
             size, dictionary_str = unpack_response_message(message)
 
             self.save_temp_results(result_file, [dictionary_str])
@@ -76,7 +76,7 @@ class Gateway:
                 if messages_received >= QUERY_2_TOTAL_WORKERS:
                     self.mark_query_completed(result_queue)
             
-            logging.info(f"[{result_queue}] Mensaje guardado en {result_file}")
+            # logging.info(f"[{result_queue}] Mensaje guardado en {result_file}")
             # logging.info(f"[{result_queue}] Enviando respuesta de tamaño {size} al cliente con contenido: {dictionary_str}")
             # send_response(self.client_skt, query_type + 2, dictionary_str) # Q2=4, Q3=5
             # logging.info(f"[{result_queue}] Respuesta enviada.")
