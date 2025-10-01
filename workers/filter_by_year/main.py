@@ -69,12 +69,12 @@ def on_message_callback_transactions(message: bytes, hour_filter_queue, categori
                     print(f"[filter_by_year] Sending {len(batch_rows)} rows to categorizer_q4 with routing key {routing_key}")
                     categorizer_q4_topic_exchange.send(q4_message, routing_key=routing_key)
 
-        #if is_last:
-            #end_message, _ = build_message(client_id, type_of_message, 1, [])
-            #hour_filter_queue.send(end_message)
-            #print("[filter_by_year] Sent END message to hour filter queue.")
-            #categorizer_q4_fanout_exchange.send(end_message)
-            #print("[filter_by_year] Sent END message to categorizer_q4 via fanout exchange.")
+        if is_last:
+            end_message, _ = build_message(client_id, type_of_message, 1, [])
+            hour_filter_queue.send(end_message)
+            print("[filter_by_year] Sent END message to hour filter queue.")
+            categorizer_q4_fanout_exchange.send(end_message)
+            print("[filter_by_year] Sent END message to categorizer_q4 via fanout exchange.")
 
     except Exception as e:
         print(f"[transactions] Error decoding message: {e}", file=sys.stderr)
@@ -178,21 +178,19 @@ def main():
         )
         print(f"[filter_by_year] Connected to categorizer_q4 topic exchange: {CATEGORIZER_Q4_TOPIC_EXCHANGE}")
         
-        # categorizer_q4_fanout_exchange = MessageMiddlewareExchange(
-        #     host=RABBITMQ_HOST,
-        #     exchange_name=CATEGORIZER_Q4_FANOUT_EXCHANGE,
-        #     exchange_type='fanout',
-        #     queue_name='', 
-        # )
-        # print(f"[filter_by_year] Connected to categorizer_q4 fanout exchange: {CATEGORIZER_Q4_FANOUT_EXCHANGE}")
+        categorizer_q4_fanout_exchange = MessageMiddlewareExchange(
+            host=RABBITMQ_HOST,
+            exchange_name=CATEGORIZER_Q4_FANOUT_EXCHANGE,
+            exchange_type='fanout',
+            queue_name='', 
+        )
+        print(f"[filter_by_year] Connected to categorizer_q4 fanout exchange: {CATEGORIZER_Q4_FANOUT_EXCHANGE}")
         
     except Exception as e:
         print(f"[filter_by_year] Error connecting to RabbitMQ: {e}", file=sys.stderr)
         return
 
     print("[filter_by_year] Starting consumer threads...")
-    categorizer_q4_fanout_exchange=""
-    categorizer_q4_topic_exchange =""
     t1 = threading.Thread(target=consume_queue_transactions, args=(queue_t, on_message_callback_transactions, hour_filter_queue, categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange))
     t2 = threading.Thread(
         target=consume_queue_t_items,
