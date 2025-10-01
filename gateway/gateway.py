@@ -31,8 +31,9 @@ RESULT_Q4_FILE = os.path.join(OUTPUT_DIR, 'result_q4.csv')
 QUERY_1_TOTAL_WORKERS = int(os.environ.get('QUERY_1_TOTAL_WORKERS', 3))
 QUERY_2_TOTAL_WORKERS = int(os.environ.get('QUERY_2_TOTAL_WORKERS', 3))
 QUERY_3_TOTAL_WORKERS = int(os.environ.get('QUERY_3_TOTAL_WORKERS', 2))
+QUERY_4_TOTAL_WORKERS = int(os.environ.get('QUERY_4_TOTAL_WORKERS', 3))
 
-QUERIES_TO_COMPLETE = 2
+QUERIES_TO_COMPLETE = 4
 
 class Gateway:
     def __init__(self):
@@ -124,9 +125,10 @@ class Gateway:
         q1_last_messages_received = 0
         q2_messages_received = 0
         q3_messages_received = 0
+        q4_messages_received = 0
         
         def on_message_callback(message: bytes):
-            nonlocal q1_last_messages_received, q2_messages_received, q3_messages_received
+            nonlocal q1_last_messages_received, q2_messages_received, q3_messages_received, q4_messages_received
             
             # Write message to result file (append mode)
             # logging.info(f"[{result_queue}] Mensaje recibido en cola: {result_queue}")
@@ -147,6 +149,9 @@ class Gateway:
                 q3_messages_received += 1
                 logging.info(f"[{result_queue}] Received Q3 message {q3_messages_received} with {len(rows)} rows, is_last={parsed_message['is_last']}")
 
+            if result_queue == RESULT_Q4_QUEUE:
+                logging.info(f"[{result_queue}] Received Q4 message {q4_messages_received} with {len(rows)} rows, is_last={parsed_message['is_last']}")
+
             self.save_temp_results(result_file, rows)
             # logging.info(f"[{result_queue}] Mensaje guardado en {result_file}")
 
@@ -164,6 +169,12 @@ class Gateway:
             if parsed_message["is_last"] and q3_messages_received == QUERY_3_TOTAL_WORKERS and result_queue == RESULT_Q3_QUEUE:
                 logging.info(f"[{result_queue}] Q3 completed: received {q3_messages_received}/{QUERY_3_TOTAL_WORKERS} is_last messages")
                 self.mark_query_completed(result_queue)
+
+            if parsed_message['is_last'] and result_queue == RESULT_Q4_QUEUE:
+                q4_messages_received += 1
+                if q4_messages_received >= QUERY_4_TOTAL_WORKERS:
+                    logging.info(f"[{result_queue}] Q4 completed: received {q4_messages_received}/{QUERY_4_TOTAL_WORKERS} is_last messages")
+                    self.mark_query_completed(result_queue)
 
         try:
             queue.start_consuming(on_message_callback)
@@ -227,7 +238,8 @@ class Gateway:
 
             self.send_file_result(RESULT_Q1_FILE)
             self.send_file_result(RESULT_Q2_FILE)
-            #self.send_file_result(RESULT_Q3_FILE)
+            self.send_file_result(RESULT_Q3_FILE)
+            self.send_file_result(RESULT_Q4_FILE)
 
             self.clear_temp_files()
             logging.info(f"Respuesta enviada, persistencia eliminada.")

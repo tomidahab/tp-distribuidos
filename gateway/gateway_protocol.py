@@ -58,7 +58,8 @@ def handle_and_forward_chunk(client_id: int, csv_type: int, is_last: int, chunk:
     """
     global filter_by_year_transactions_exchange, filter_by_year_transaction_items_exchange, categorizer_query2_items_queue, categorizer_query2_transactions_queue, categorizer_query2_items_exchange
     global transactions_worker_counter, transaction_items_worker_counter
-    
+    global birth_dic_data_responses_queue
+
     rows = chunk.decode("utf-8").splitlines()
     message, _ = build_message(client_id, csv_type, is_last, rows)
     MAX_RETRIES = 10

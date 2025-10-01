@@ -58,10 +58,10 @@ class Client:
             # logging.info(f"data_type: {data_type}, is_last: {is_last}, batch_size: {len(lines_batch)}\n")
 
             for line in lines_batch:
-                logging.info(f"{line}")
+                # logging.info(f"{line}")
 
                 if max_results > 0:
-                    logging.info(f"[{query} result]:{line} ")
+                    logging.info(f"[{query} result]:{str(line).strip()} ")
                     max_results -= 1
 
     def recv_q2_results(self):
@@ -135,9 +135,8 @@ class Client:
                 
             # Wait for results
             self.recv_query_result("Q1", 5)
-            # self.recv_query_result("Q2")
             self.recv_q2_results()
-            # self.recv_query_result("Q3", 5)
+            self.recv_query_result("Q3", 5)
 
             if q4_dataset:
                 self.recv_query_result("Q4")
