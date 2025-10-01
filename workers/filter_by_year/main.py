@@ -93,9 +93,19 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
                 hour_filter_exchange.send(end_message, routing_key=routing_key)
                 print(f"[filter_by_year] Worker {WORKER_INDEX} Sent END message to filter_by_hour worker {i} via topic exchange", flush=True)
             
-            # Send END message to categorizer_q4 via fanout exchange
-            categorizer_q4_fanout_exchange.send(end_message)
-            print(f"[filter_by_year] Worker {WORKER_INDEX} Sent END message to categorizer_q4 via fanout exchange.")
+            # Send messages for Q4 workers
+            for store_id in range(CATEGORIZER_Q4_WORKERS):
+                routing_key = f"store.{store_id % CATEGORIZER_Q4_WORKERS}"
+                q4_message, _ = build_message(client_id, type_of_message, 1, [])
+                categorizer_q4_topic_exchange.send(q4_message, routing_key=routing_key)
+                print(f"[filter_by_year] Sent END message to hour filter queue. routing_key={routing_key}")
+
+            # Using topic instead of fanout so do not use the next code
+            # end_message, _ = build_message(client_id, type_of_message, 1, [])
+            # hour_filter_queue.send(end_message)
+            # print("[filter_by_year] Sent END message to categorizer_q4 via fanout exchange.")
+            # categorizer_q4_fanout_exchange.send(end_message)
+            # print("[filter_by_year] Sent END message to hour filter queue.")
 
     except Exception as e:
         print(f"[transactions] Worker {WORKER_INDEX} Error decoding message: {e}", file=sys.stderr)

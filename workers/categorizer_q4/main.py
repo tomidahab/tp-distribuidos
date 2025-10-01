@@ -65,7 +65,7 @@ def listen_for_transactions():
         print("[categorizer_q4] Message error in middleware.", file=sys.stderr)
     finally:
         queue.close()
-        fanout_queue.close()
+        # fanout_queue.close()
     return store_user_counter
 
 def get_top_users_per_store(store_user_counter, top_n=3):

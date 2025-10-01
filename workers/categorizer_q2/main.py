@@ -5,7 +5,7 @@ import time
 from datetime import datetime
 
 from common.protocol import create_response_message
-
+from common import config
 # Debug imports
 try:
     from common.protocol import parse_message, row_to_dict, build_message, CSV_TYPES_REVERSE
@@ -216,10 +216,10 @@ def main():
         sales_stats = listen_for_sales(items, topic_middleware)
         print("[categorizer_q2] Final sales stats:")
             
-        if not sales_stats:
-            print("[categorizer_q2] No sales data received, exiting.")
-            return
-        
+        # if not sales_stats:
+        #     print("[categorizer_q2] No sales data received, exiting.")
+        #     return
+        # NOTE: The worker must send the message even if no sales were recorded, to indicate completion.
         
         results = get_top_products_per_year_month(sales_stats, items)
         print("[categorizer_q2] Results to send to gateway:")
