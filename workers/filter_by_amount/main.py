@@ -40,7 +40,7 @@ def on_message_callback(message: bytes, topic_middleware, should_stop):
     if should_stop.is_set():  # Don't process if we're stopping
         return
         
-    print(f"[filter_by_amount] Worker {WORKER_INDEX} received a message!", flush=True)
+    # print(f"[filter_by_amount] Worker {WORKER_INDEX} received a message!", flush=True)
     parsed_message = parse_message(message)
     type_of_message = parsed_message['csv_type']  
     client_id = parsed_message['client_id']
@@ -49,7 +49,7 @@ def on_message_callback(message: bytes, topic_middleware, should_stop):
     # Count incoming rows
     incoming_rows = len(parsed_message['rows'])
     rows_received += incoming_rows
-    print(f"[filter_by_amount] Worker {WORKER_INDEX} received {incoming_rows} rows (total received: {rows_received})", flush=True)
+    # print(f"[filter_by_amount] Worker {WORKER_INDEX} received {incoming_rows} rows (total received: {rows_received})", flush=True)
     
     if is_last:
         end_messages_received += 1
@@ -69,9 +69,7 @@ def on_message_callback(message: bytes, topic_middleware, should_stop):
         
         # Count outgoing rows
         rows_sent += len(filtered_rows)
-        print(f"[filter_by_amount] Worker {WORKER_INDEX} sent {len(filtered_rows)} filtered rows (total sent: {rows_sent}), final_is_last={final_is_last}", flush=True)
-    else:
-        print(f"[filter_by_amount] Worker {WORKER_INDEX} message filtered out by amount or waiting for more END messages.", flush=True)
+        # print(f"[filter_by_amount] Worker {WORKER_INDEX} sent {len(filtered_rows)} filtered rows (total sent: {rows_sent}), final_is_last={final_is_last}", flush=True)
     
     if is_last and end_messages_received == NUMBER_OF_HOUR_WORKERS:
         print(f"[filter_by_amount] Worker {WORKER_INDEX} received all END messages. FINAL STATS: received={rows_received} rows, sent={rows_sent} rows", flush=True)

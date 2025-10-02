@@ -38,9 +38,9 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
         client_id = parsed_message['client_id']
         is_last = parsed_message['is_last']
         new_rows = []
-        
-        print(f"[filter_by_year] Worker {WORKER_INDEX} received transactions message with {len(parsed_message['rows'])} rows, is_last={is_last}")
-        
+
+        # print(f"[filter_by_year] Worker {WORKER_INDEX} received transactions message with {len(parsed_message['rows'])} rows, is_last={is_last}")
+
         for row in parsed_message['rows']:
             dic_fields_row = row_to_dict(row, type_of_message)
             try:
@@ -69,7 +69,7 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
                     if worker_rows:
                         new_message, _ = build_message(client_id, type_of_message, 0, worker_rows)
                         hour_filter_exchange.send(new_message, routing_key=routing_key)
-                        print(f"[filter_by_year] Worker {WORKER_INDEX} Sent {len(worker_rows)} rows to filter_by_hour {routing_key}", flush=True)
+                        # print(f"[filter_by_year] Worker {WORKER_INDEX} Sent {len(worker_rows)} rows to filter_by_hour {routing_key}", flush=True)
 
             # Send to categorizer_q4 workers  
             batches = defaultdict(list)
@@ -82,7 +82,7 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
             for routing_key, batch_rows in batches.items():
                 if batch_rows:
                     q4_message, _ = build_message(client_id, type_of_message, 0, batch_rows)
-                    print(f"[filter_by_year] Worker {WORKER_INDEX} Sending {len(batch_rows)} rows to categorizer_q4 with routing key {routing_key}")
+                    # print(f"[filter_by_year] Worker {WORKER_INDEX} Sending {len(batch_rows)} rows to categorizer_q4 with routing key {routing_key}")
                     categorizer_q4_topic_exchange.send(q4_message, routing_key=routing_key)
 
         if is_last:
@@ -117,7 +117,7 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
         client_id = parsed_message['client_id']
         is_last = parsed_message['is_last']
 
-        print(f"[filter_by_year] Worker {WORKER_INDEX} received transaction_items message with {len(parsed_message['rows'])} rows, is_last={is_last}")
+        # print(f"[filter_by_year] Worker {WORKER_INDEX} received transaction_items message with {len(parsed_message['rows'])} rows, is_last={is_last}")
 
         rows_by_month = defaultdict(list)
         for row in parsed_message['rows']:
@@ -135,7 +135,7 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
             if rows != []:
                 new_message, _ = build_message(client_id, type_of_message, 0, rows)
                 routing_key = f"month.{month}"
-                print(f"[filter_by_year] Worker {WORKER_INDEX} Sending {len(rows)} rows for month {month} to categorizer_q2 with routing key {routing_key}")
+                # print(f"[filter_by_year] Worker {WORKER_INDEX} Sending {len(rows)} rows for month {month} to categorizer_q2 with routing key {routing_key}")
                 item_categorizer_exchange.send(new_message, routing_key=routing_key)
 
         if is_last == 1:
@@ -239,9 +239,9 @@ def main():
                 
                 if is_last:
                     transactions_end_received += 1
-                    print(f"[filter_by_year] Worker {WORKER_INDEX} received transactions END message {transactions_end_received}")
+                    # print(f"[filter_by_year] Worker {WORKER_INDEX} received transactions END message {transactions_end_received}")
                     if transactions_end_received >= 1:  # Expecting 1 END message from gateway
-                        print(f"[filter_by_year] Worker {WORKER_INDEX} stopping transactions consumer")
+                        # print(f"[filter_by_year] Worker {WORKER_INDEX} stopping transactions consumer")
                         receiver_exchange_t.stop_consuming()
                 
                 on_message_callback_transactions(message, hour_filter_exchange, categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange)

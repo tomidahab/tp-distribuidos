@@ -127,7 +127,7 @@ def listen_for_sales(items, topic_middleware):
             parsed_message = parse_message(message)
             type_of_message = parsed_message['csv_type']  
             is_last = parsed_message['is_last']
-            print(f"[categorizer_q2] Received transaction message, csv_type: {type_of_message}, is_last: {is_last}, rows: {len(parsed_message['rows'])}")
+            # print(f"[categorizer_q2] Received transaction message, csv_type: {type_of_message}, is_last: {is_last}, rows: {len(parsed_message['rows'])}")
             
             for row in parsed_message['rows']:
                 dic_fields_row = row_to_dict(row, type_of_message)
@@ -142,7 +142,7 @@ def listen_for_sales(items, topic_middleware):
                 # print(f"[categorizer_q2] Updated stats for {key}: {sales_stats[key]}")  # Too verbose
             if is_last:
                 end_messages_received += 1
-                print(f"[categorizer_q2] Received END message {end_messages_received}/{NUMBER_OF_YEAR_WORKERS} from filter_by_year workers")
+                # print(f"[categorizer_q2] Received END message {end_messages_received}/{NUMBER_OF_YEAR_WORKERS} from filter_by_year workers")
                 if end_messages_received >= NUMBER_OF_YEAR_WORKERS:
                     print(f"[categorizer_q2] Received all END messages from {NUMBER_OF_YEAR_WORKERS} filter_by_year workers, stopping sales collection.")
                     queue.stop_consuming()

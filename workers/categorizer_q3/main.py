@@ -79,17 +79,17 @@ def listen_for_transactions():
 
     def on_message_callback(message: bytes):
         nonlocal end_messages_received  # Allow modification of the outer variable
-        print(f"[categorizer_q3] Worker {WORKER_INDEX} received a message!", flush=True)
+        # print(f"[categorizer_q3] Worker {WORKER_INDEX} received a message!", flush=True)
         try:
             parsed_message = parse_message(message)
             type_of_message = parsed_message['csv_type']  
             client_id = parsed_message['client_id']
             is_last = parsed_message['is_last']
             
-            print(f"[categorizer_q3] Message details - is_last: {is_last}, rows: {len(parsed_message['rows'])}", flush=True)
+            # print(f"[categorizer_q3] Message details - is_last: {is_last}, rows: {len(parsed_message['rows'])}", flush=True)
 
             for row in parsed_message['rows']:
-                print(f"[categorizer_q3] Processing row: {row}, is_last={is_last}", flush=True)
+                # print(f"[categorizer_q3] Processing row: {row}, is_last={is_last}", flush=True)
                 dic_fields_row = row_to_dict(row, type_of_message)
                 
                 # Extract transaction data

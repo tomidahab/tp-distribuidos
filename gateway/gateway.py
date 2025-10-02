@@ -241,7 +241,6 @@ class Gateway:
             self.send_file_result(RESULT_Q3_FILE)
             self.send_file_result(RESULT_Q4_FILE)
 
-            self.clear_temp_files()
             logging.info(f"Respuesta enviada, persistencia eliminada.")
     
         except Exception as e:

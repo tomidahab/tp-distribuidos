@@ -155,7 +155,7 @@ services:
       - RECEIVER_EXCHANGE=filter_by_hour_exchange
       - WORKER_INDEX=0
       - START_HOUR=6
-      - END_HOUR=11
+      - END_HOUR=22
       - FILTER_BY_AMOUNT_EXCHANGE=filter_by_amount_exchange
       - CATEGORIZER_Q3_EXCHANGE=categorizer_q3_exchange
       - CATEGORIZER_Q3_FANOUT_EXCHANGE=categorizer_q3_fanout_exchange
@@ -175,7 +175,7 @@ services:
       - RECEIVER_EXCHANGE=filter_by_hour_exchange
       - WORKER_INDEX=1
       - START_HOUR=6
-      - END_HOUR=11
+      - END_HOUR=22
       - FILTER_BY_AMOUNT_EXCHANGE=filter_by_amount_exchange
       - CATEGORIZER_Q3_EXCHANGE=categorizer_q3_exchange
       - CATEGORIZER_Q3_FANOUT_EXCHANGE=categorizer_q3_fanout_exchange
@@ -195,7 +195,7 @@ services:
       - RECEIVER_EXCHANGE=filter_by_hour_exchange
       - WORKER_INDEX=2
       - START_HOUR=6
-      - END_HOUR=11
+      - END_HOUR=22
       - FILTER_BY_AMOUNT_EXCHANGE=filter_by_amount_exchange
       - CATEGORIZER_Q3_EXCHANGE=categorizer_q3_exchange
       - CATEGORIZER_Q3_FANOUT_EXCHANGE=categorizer_q3_fanout_exchange
@@ -214,7 +214,7 @@ services:
       - RABBITMQ_HOST=rabbitmq_server
       - RECEIVER_EXCHANGE=filter_by_amount_exchange
       - WORKER_INDEX=0
-      - MIN_AMOUNT=15.0
+      - MIN_AMOUNT=75.0
       - RESULT_QUEUE=query1_result_receiver_queue
       - NUMBER_OF_HOUR_WORKERS=3
     depends_on:
@@ -229,7 +229,7 @@ services:
       - RABBITMQ_HOST=rabbitmq_server
       - RECEIVER_EXCHANGE=filter_by_amount_exchange
       - WORKER_INDEX=1
-      - MIN_AMOUNT=15.0
+      - MIN_AMOUNT=75.0
       - RESULT_QUEUE=query1_result_receiver_queue
       - NUMBER_OF_HOUR_WORKERS=3
     depends_on:
@@ -244,7 +244,7 @@ services:
       - RABBITMQ_HOST=rabbitmq_server
       - RECEIVER_EXCHANGE=filter_by_amount_exchange
       - WORKER_INDEX=2
-      - MIN_AMOUNT=15.0
+      - MIN_AMOUNT=75.0
       - RESULT_QUEUE=query1_result_receiver_queue
       - NUMBER_OF_HOUR_WORKERS=3
     depends_on:
