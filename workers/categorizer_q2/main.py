@@ -1,4 +1,5 @@
 import os
+import signal
 import sys
 from collections import defaultdict
 import time
@@ -27,6 +28,19 @@ ITEMS_FANOUT_EXCHANGE = os.environ.get('ITEMS_FANOUT_EXCHANGE', 'categorizer_q2_
 WORKER_INDEX = int(os.environ.get('WORKER_INDEX', 0))
 TOTAL_WORKERS = int(os.environ.get('TOTAL_WORKERS', 1))
 NUMBER_OF_YEAR_WORKERS = int(os.environ.get('NUMBER_OF_YEAR_WORKERS', '3'))
+
+topic_middleware = None
+items_exchange = None
+gateway_result_queue = None
+
+def _close_queue(queue):
+    if queue:
+        queue.close()
+
+def _sigterm_handler(signum, _):
+    _close_queue(topic_middleware)
+    _close_queue(items_exchange)
+    _close_queue(gateway_result_queue)
 
 def get_months_for_worker(worker_index, total_workers):
     months = list(range(1, 13))
@@ -69,6 +83,7 @@ def setup_queue_and_exchanges():
 def listen_for_items():
     items = []
     try:
+        global items_exchange
         items_exchange = MessageMiddlewareExchange(
             host=RABBITMQ_HOST,
             exchange_name=ITEMS_FANOUT_EXCHANGE,
@@ -185,23 +200,27 @@ def get_top_products_per_year_month(sales_stats, items):
 
 def send_results_to_gateway(results):
     try:
-        queue = MessageMiddlewareQueue(RABBITMQ_HOST, GATEWAY_QUEUE)
+        global gateway_result_queue
+        gateway_result_queue = MessageMiddlewareQueue(RABBITMQ_HOST, GATEWAY_QUEUE)
         # Send all results with is_last=1 using build_message format
         message, _ = build_message(0, 2, 1, results)  # csv_type=2 for Q2
-        queue.send(message)
+        gateway_result_queue.send(message)
         print(f"[categorizer_q2] Worker {WORKER_INDEX} sent {len(results)} results to gateway with is_last=1")
-        queue.close()
+        gateway_result_queue.close()
     except Exception as e:
         print(f"[categorizer_q2] ERROR in send_results_to_gateway: {e}")
         raise e
 
 def main():
+    signal.signal(signal.SIGTERM, _sigterm_handler)
+    signal.signal(signal.SIGINT, _sigterm_handler)
     try:
         print("[categorizer_q2] Waiting for RabbitMQ to be ready...")
         time.sleep(30)  # Esperar a que RabbitMQ esté listo
         print("[categorizer_q2] Starting worker...")
         
         # Setup queues and exchanges
+        global topic_middleware
         topic_middleware = setup_queue_and_exchanges()
         print("[categorizer_q2] Queues and exchanges setup completed.")
         

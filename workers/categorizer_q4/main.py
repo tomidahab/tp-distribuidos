@@ -1,4 +1,5 @@
 import os
+import signal
 import sys
 from collections import defaultdict, Counter
 import time
@@ -14,6 +15,17 @@ BIRTHDAY_DICT_QUEUE = os.environ.get('BIRTHDAY_DICT_QUEUE', 'birthday_dictionary
 AMOUNT_OF_WORKERS = int(os.environ.get('AMOUNT_OF_WORKERS', 1))
 NUMBER_OF_YEAR_WORKERS = int(os.environ.get('NUMBER_OF_YEAR_WORKERS', '3'))
 
+receiver_queue = None
+birthday_dict_queue = None
+
+def _close_queue(queue):
+    if queue:
+        queue.close()
+
+def _sigterm_handler(signum, _):
+    _close_queue(receiver_queue)
+    _close_queue(birthday_dict_queue)
+
 def listen_for_transactions():
     store_user_counter = defaultdict(Counter)
     end_messages_received = 0
@@ -21,7 +33,8 @@ def listen_for_transactions():
     topic_routing_key = f"store.{WORKER_INDEX}"
     print(f"[categorizer_q4] Worker index: {WORKER_INDEX}, routing key: {topic_routing_key}")
     # Bind to both topic and fanout exchanges
-    queue = MessageMiddlewareExchange(
+    global receiver_queue
+    receiver_queue = MessageMiddlewareExchange(
         host=RABBITMQ_HOST,
         exchange_name=TOPIC_EXCHANGE,
         exchange_type='topic',
@@ -55,16 +68,16 @@ def listen_for_transactions():
             print(f"[categorizer_q4] Received END message {end_messages_received}/{NUMBER_OF_YEAR_WORKERS} from filter_by_year workers")
             if end_messages_received >= NUMBER_OF_YEAR_WORKERS:
                 print(f"[categorizer_q4] Received all END messages from {NUMBER_OF_YEAR_WORKERS} filter_by_year workers, stopping transaction collection.")
-                queue.stop_consuming()
+                receiver_queue.stop_consuming()
 
     try:
-        queue.start_consuming(on_message_callback)
+        receiver_queue.start_consuming(on_message_callback)
     except MessageMiddlewareDisconnectedError:
         print("[categorizer_q4] Disconnected from middleware.", file=sys.stderr)
     except MessageMiddlewareMessageError:
         print("[categorizer_q4] Message error in middleware.", file=sys.stderr)
     finally:
-        queue.close()
+        receiver_queue.close()
         # fanout_queue.close()
     return store_user_counter
 
@@ -76,7 +89,8 @@ def get_top_users_per_store(store_user_counter, top_n=3):
     return top_users
 
 def send_results_to_birthday_dict(top_users):
-    queue = MessageMiddlewareQueue(RABBITMQ_HOST, BIRTHDAY_DICT_QUEUE)
+    global birthday_dict_queue
+    birthday_dict_queue = MessageMiddlewareQueue(RABBITMQ_HOST, BIRTHDAY_DICT_QUEUE)
     # Send one message per store with its top 3 users
     for store_id, users in top_users.items():
         rows = []
@@ -84,15 +98,17 @@ def send_results_to_birthday_dict(top_users):
             rows.append(f"{store_id},{user_id},{count}")
         # is_last=0 for regular messages
         message, _ = build_message(0, 4, 0, rows)
-        queue.send(message)
+        birthday_dict_queue.send(message)
         print(f"[categorizer_q4] Sent top users for store {store_id} to Birthday_Dictionary: {rows}")
     # After all stores, send the end message
     end_message, _ = build_message(0, 4, 1, [])
-    queue.send(end_message)
+    birthday_dict_queue.send(end_message)
     print("[categorizer_q4] Sent END message to Birthday_Dictionary.")
-    queue.close()
+    birthday_dict_queue.close()
 
 def main():
+    signal.signal(signal.SIGTERM, _sigterm_handler)
+    signal.signal(signal.SIGINT, _sigterm_handler)
     time.sleep(30)
     store_user_counter = listen_for_transactions()
     print("[categorizer_q4] Final store-user stats:")

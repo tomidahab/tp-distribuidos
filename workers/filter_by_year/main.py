@@ -1,4 +1,5 @@
 import os
+import signal
 import sys
 import threading
 from time import sleep
@@ -27,6 +28,29 @@ TOPIC_EXCHANGE = os.environ.get('TOPIC_EXCHANGE', 'categorizer_q2_topic_exchange
 CATEGORIZER_Q4_TOPIC_EXCHANGE = os.environ.get('CATEGORIZER_Q4_TOPIC_EXCHANGE', 'categorizer_q4_topic_exchange')
 CATEGORIZER_Q4_FANOUT_EXCHANGE = os.environ.get('CATEGORIZER_Q4_FANOUT_EXCHANGE', 'categorizer_q4_fanout_exchange')
 CATEGORIZER_Q4_WORKERS = int(os.environ.get('CATEGORIZER_Q4_WORKERS', 3))
+
+receiver_exchange_t = None
+receiver_exchange_t_items = None
+hour_filter_exchange = None
+item_categorizer_exchange = None
+item_categorizer_fanout_exchange = None
+categorizer_q3_topic_exchange = None
+categorizer_q4_topic_exchange = None
+categorizer_q4_fanout_exchange = None
+
+def _close_queue(queue):
+    if queue:
+        queue.close()
+
+def _sigterm_handler(signum, _):
+    _close_queue(receiver_exchange_t)
+    _close_queue(receiver_exchange_t_items)
+    _close_queue(hour_filter_exchange)
+    _close_queue(item_categorizer_exchange)
+    _close_queue(item_categorizer_fanout_exchange)
+    _close_queue(categorizer_q3_topic_exchange)
+    _close_queue(categorizer_q4_topic_exchange)
+    _close_queue(categorizer_q4_fanout_exchange)
 
 print(f"[filter_by_year] Worker {WORKER_INDEX} starting with FILTER_YEARS: {FILTER_YEARS}")
 
@@ -149,6 +173,19 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
         print(f"[t_items] Worker {WORKER_INDEX} Error decoding message: {e}", file=sys.stderr)
 
 def main():
+    global receiver_exchange_t
+    global receiver_exchange_t_items
+    global receiver_exchange_t
+    global receiver_exchange_t_items
+    global hour_filter_exchange
+    global item_categorizer_exchange
+    global item_categorizer_fanout_exchange
+    global categorizer_q4_topic_exchange
+    global categorizer_q4_fanout_exchange
+
+    signal.signal(signal.SIGTERM, _sigterm_handler)
+    signal.signal(signal.SIGINT, _sigterm_handler)
+    
     print(f"[filter_by_year] Worker {WORKER_INDEX} starting...")
     sleep(config.MIDDLEWARE_UP_TIME)  
     print(f"[filter_by_year] Worker {WORKER_INDEX} Connecting to RabbitMQ at {RABBITMQ_HOST}, exchanges: {RECEIVER_EXCHANGE_T}, {RECEIVER_EXCHANGE_T_ITEMS}, filter years: {FILTER_YEARS}")

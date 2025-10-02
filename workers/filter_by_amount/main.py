@@ -1,4 +1,5 @@
 import os
+import signal
 import sys
 from time import sleep
 from common.protocol import parse_message, row_to_dict, build_message
@@ -16,6 +17,17 @@ NUMBER_OF_HOUR_WORKERS = int(os.environ.get('NUMBER_OF_HOUR_WORKERS', '3'))
 rows_received = 0
 rows_sent = 0
 end_messages_received = 0
+
+queue_result = None
+topic_middleware = None
+
+def _close_queue(queue):
+    if queue:
+        queue.close()
+
+def _sigterm_handler(signum, _):
+    _close_queue(queue_result)
+    _close_queue(topic_middleware)
 
 def filter_message_by_amount(parsed_message, min_amount: float) -> list:
     try:
@@ -58,6 +70,7 @@ def on_message_callback(message: bytes, topic_middleware, should_stop):
     filtered_rows = filter_message_by_amount(parsed_message, MIN_AMOUNT)
     
     if filtered_rows or (is_last and end_messages_received == NUMBER_OF_HOUR_WORKERS):
+        global queue_result
         # Create result queue for each message to avoid connection conflicts
         queue_result = MessageMiddlewareQueue(RABBITMQ_HOST, RESULT_QUEUE)
         
@@ -85,7 +98,8 @@ def make_on_message_callback(topic_middleware, should_stop):
 
 def main():
     import threading
-    
+    signal.signal(signal.SIGTERM, _sigterm_handler)
+    signal.signal(signal.SIGINT, _sigterm_handler)
     # Global counters for debugging
     global rows_received, rows_sent, end_messages_received
     rows_received = 0
@@ -96,6 +110,7 @@ def main():
     print(f"[filter_by_amount] Worker {WORKER_INDEX} connecting to RabbitMQ at {RABBITMQ_HOST}, exchange: {RECEIVER_EXCHANGE}, filter by min amount: {MIN_AMOUNT}", flush=True)
     
     # Create topic exchange middleware for receiving transaction messages
+    global topic_middleware
     topic_middleware = MessageMiddlewareExchange(
         host=RABBITMQ_HOST,
         exchange_name=RECEIVER_EXCHANGE,
@@ -105,7 +120,7 @@ def main():
     )
     
     # Create result queue
-    queue_result = MessageMiddlewareQueue(RABBITMQ_HOST, RESULT_QUEUE)
+    # queue_result = MessageMiddlewareQueue(RABBITMQ_HOST, RESULT_QUEUE)
     
     print(f"[filter_by_amount] Worker {WORKER_INDEX} listening for transactions on exchange: {RECEIVER_EXCHANGE} with routing key: transaction.{WORKER_INDEX}", flush=True)
     
@@ -135,10 +150,10 @@ def main():
             topic_middleware.close()
         except Exception as e:
             print(f"[filter_by_amount] Worker {WORKER_INDEX} error closing topic middleware: {e}", file=sys.stderr)
-        try:
-            queue_result.close()
-        except Exception as e:
-            print(f"[filter_by_amount] Worker {WORKER_INDEX} error closing result queue: {e}", file=sys.stderr)
+        # try:
+        #     queue_result.close()
+        # except Exception as e:
+        #     print(f"[filter_by_amount] Worker {WORKER_INDEX} error closing result queue: {e}", file=sys.stderr)
 
 if __name__ == "__main__":
     main()

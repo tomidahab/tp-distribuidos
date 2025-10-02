@@ -1,5 +1,6 @@
 from datetime import datetime
 import os
+import signal
 import time
 import sys
 from collections import defaultdict
@@ -26,6 +27,21 @@ rows_received = 0
 rows_sent_to_amount = 0
 rows_sent_to_q3 = 0
 end_messages_received = 0
+
+topic_middleware = None
+filter_by_amount_exchange = None
+categorizer_q3_topic_exchange = None
+categorizer_q3_fanout_exchange = None
+
+def _close_queue(queue):
+    if queue:
+        queue.close()
+
+def _sigterm_handler(signum, _):
+    _close_queue(topic_middleware)
+    _close_queue(filter_by_amount_exchange)
+    _close_queue(categorizer_q3_topic_exchange)
+    _close_queue(categorizer_q3_fanout_exchange)
 
 def get_semester_key(year, month):
     """Generate semester routing key based on year and month"""
@@ -158,7 +174,8 @@ def make_on_message_callback(filter_by_amount_exchange, categorizer_q3_topic_exc
 
 def main():
     import threading
-    
+    signal.signal(signal.SIGTERM, _sigterm_handler)
+    signal.signal(signal.SIGINT, _sigterm_handler)
     # Global counters for debugging
     global rows_received, rows_sent_to_amount, rows_sent_to_q3
     rows_received = 0
@@ -175,6 +192,7 @@ def main():
     print(f"[filter_by_hour] Worker {WORKER_INDEX} RabbitMQ should be ready now!", flush=True)
     
     # Create topic exchange middleware for receiving messages
+    global topic_callback
     topic_middleware = MessageMiddlewareExchange(
         host=RABBITMQ_HOST,
         exchange_name=RECEIVER_EXCHANGE,
@@ -187,6 +205,7 @@ def main():
     
     try:
         print(f"[filter_by_hour] Worker {WORKER_INDEX} creating filter_by_amount topic exchange connection...")
+        global filter_by_amount_exchange
         filter_by_amount_exchange = MessageMiddlewareExchange(
             RABBITMQ_HOST,
             exchange_name=FILTER_BY_AMOUNT_EXCHANGE,
@@ -197,6 +216,7 @@ def main():
         
         print(f"[filter_by_hour] Worker {WORKER_INDEX} creating categorizer_q3 topic exchange connection...")
         # Connect to categorizer_q3 topic exchange
+        global categorizer_q3_topic_exchange
         categorizer_q3_topic_exchange = MessageMiddlewareExchange(
             RABBITMQ_HOST,
             exchange_name=CATEGORIZER_Q3_EXCHANGE,
@@ -207,6 +227,7 @@ def main():
         
         print(f"[filter_by_hour] Worker {WORKER_INDEX} creating categorizer_q3 fanout exchange connection...")
         # Connect to categorizer_q3 fanout exchange for END messages
+        global categorizer_q3_fanout_exchange
         categorizer_q3_fanout_exchange = MessageMiddlewareExchange(
             RABBITMQ_HOST,
             exchange_name=CATEGORIZER_Q3_FANOUT_EXCHANGE,

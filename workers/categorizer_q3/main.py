@@ -1,4 +1,5 @@
 import os
+import signal
 import sys
 from collections import defaultdict
 import time
@@ -33,6 +34,17 @@ SEMESTER_MAPPING = {
     1: ['semester.2024-1', 'semester.2025-1']   # Worker 1: first semesters
 }
 
+topic_middleware = None
+gateway_result_queue = None
+
+def _close_queue(queue):
+    if queue:
+        queue.close()
+
+def _sigterm_handler(signum, _):
+    _close_queue(topic_middleware)
+    _close_queue(gateway_result_queue)
+
 def get_semester(month):
     return 1 if 1 <= month <= 6 else 2
 
@@ -52,6 +64,7 @@ def listen_for_transactions():
     
     try:
         print(f"[categorizer_q3] Creating topic MessageMiddlewareExchange for data messages...", flush=True)
+        global topic_middleware
         topic_middleware = MessageMiddlewareExchange(
             host=RABBITMQ_HOST, 
             exchange_name=RECEIVER_EXCHANGE, 
@@ -132,7 +145,8 @@ def listen_for_transactions():
 
 def send_results_to_gateway(semester_store_stats):
     try:
-        queue = MessageMiddlewareQueue(RABBITMQ_HOST, GATEWAY_QUEUE)
+        global gateway_result_queue
+        gateway_result_queue = MessageMiddlewareQueue(RABBITMQ_HOST, GATEWAY_QUEUE)
         
         # Convert to CSV format like Q1
         csv_lines = []
@@ -142,15 +156,17 @@ def send_results_to_gateway(semester_store_stats):
             
         # Send as Q1-style message with rows and is_last=1
         message, _ = build_message(0, 3, 1, csv_lines)  # client_id=0, csv_type=3, is_last=1 (final message)
-        queue.send(message)
+        gateway_result_queue.send(message)
         print(f"[categorizer_q3] Sent {len(csv_lines)} results to gateway in batch")
             
-        queue.close()
+        gateway_result_queue.close()
     except Exception as e:
         print(f"[categorizer_q3] ERROR in send_results_to_gateway: {e}")
         raise e
 
 def main():
+    signal.signal(signal.SIGTERM, _sigterm_handler)
+    signal.signal(signal.SIGINT, _sigterm_handler)
     print("[categorizer_q3] MAIN FUNCTION STARTED", flush=True)
     try:
         print("[categorizer_q3] Waiting for RabbitMQ to be ready...", flush=True)
