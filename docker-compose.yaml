@@ -51,11 +51,25 @@ services:
     volumes:
       - ./data/received:/app/data/received
 
-  client:
+  client_1:
     build:
       context: .
       dockerfile: client/Dockerfile
-    container_name: client
+    container_name: client_1
+    environment:
+      - CLIENT_ID=client_1
+    depends_on:
+      - gateway
+    volumes:
+      - ./data/input:/data/input
+
+  client_2:
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+    container_name: client_2
+    environment:
+      - CLIENT_ID=client_2
     depends_on:
       - gateway
     volumes:
@@ -257,7 +271,7 @@ services:
     container_name: categorizer_q2_worker_1
     environment:
       - RABBITMQ_HOST=rabbitmq_server
-      - ITEMS_QUEUE=categorizer_q2_items_queue_1
+      - ITEMS_QUEUE=categorizer_q2_items_queue
       - RECEIVER_QUEUE=categorizer_q2_receiver_queue_1
       - GATEWAY_QUEUE=query2_result_receiver_queue
       - TOPIC_EXCHANGE=categorizer_q2_topic_exchange
@@ -277,7 +291,7 @@ services:
     container_name: categorizer_q2_worker_2
     environment:
       - RABBITMQ_HOST=rabbitmq_server
-      - ITEMS_QUEUE=categorizer_q2_items_queue_2
+      - ITEMS_QUEUE=categorizer_q2_items_queue
       - RECEIVER_QUEUE=categorizer_q2_receiver_queue_2
       - GATEWAY_QUEUE=query2_result_receiver_queue
       - TOPIC_EXCHANGE=categorizer_q2_topic_exchange
@@ -297,7 +311,7 @@ services:
     container_name: categorizer_q2_worker_3
     environment:
       - RABBITMQ_HOST=rabbitmq_server
-      - ITEMS_QUEUE=categorizer_q2_items_queue_3
+      - ITEMS_QUEUE=categorizer_q2_items_queue
       - RECEIVER_QUEUE=categorizer_q2_receiver_queue_3
       - GATEWAY_QUEUE=query2_result_receiver_queue
       - TOPIC_EXCHANGE=categorizer_q2_topic_exchange

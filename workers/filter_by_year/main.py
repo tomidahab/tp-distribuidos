@@ -63,7 +63,7 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
         is_last = parsed_message['is_last']
         new_rows = []
 
-        # print(f"[filter_by_year] Worker {WORKER_INDEX} received transactions message with {len(parsed_message['rows'])} rows, is_last={is_last}")
+        print(f"[filter_by_year] Worker {WORKER_INDEX} received transactions message from client {client_id} with {len(parsed_message['rows'])} rows, is_last={is_last}")
 
         for row in parsed_message['rows']:
             dic_fields_row = row_to_dict(row, type_of_message)
@@ -77,7 +77,7 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
 
         if new_rows or is_last: 
             if is_last:
-                print(f"[filter_by_year] Worker {WORKER_INDEX} Number of rows on the message passed year filter: {len(new_rows)}, is_last={is_last}")
+                print(f"[filter_by_year] Worker {WORKER_INDEX} client {client_id}: {len(new_rows)} rows passed year filter, is_last={is_last}")
             
             # Send to filter_by_hour workers using round robin
             if new_rows:
@@ -93,7 +93,7 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
                     if worker_rows:
                         new_message, _ = build_message(client_id, type_of_message, 0, worker_rows)
                         hour_filter_exchange.send(new_message, routing_key=routing_key)
-                        # print(f"[filter_by_year] Worker {WORKER_INDEX} Sent {len(worker_rows)} rows to filter_by_hour {routing_key}", flush=True)
+                        print(f"[filter_by_year] Worker {WORKER_INDEX} client {client_id}: Sent {len(worker_rows)} rows to filter_by_hour {routing_key}")
 
             # Send to categorizer_q4 workers  
             batches = defaultdict(list)
@@ -106,7 +106,7 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
             for routing_key, batch_rows in batches.items():
                 if batch_rows:
                     q4_message, _ = build_message(client_id, type_of_message, 0, batch_rows)
-                    # print(f"[filter_by_year] Worker {WORKER_INDEX} Sending {len(batch_rows)} rows to categorizer_q4 with routing key {routing_key}")
+                    print(f"[filter_by_year] Worker {WORKER_INDEX} client {client_id}: Sending {len(batch_rows)} rows to categorizer_q4 with routing key {routing_key}")
                     categorizer_q4_topic_exchange.send(q4_message, routing_key=routing_key)
 
         if is_last:
@@ -115,14 +115,14 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
             for i in range(NUMBER_OF_HOUR_WORKERS):
                 routing_key = f"hour.{i}"
                 hour_filter_exchange.send(end_message, routing_key=routing_key)
-                print(f"[filter_by_year] Worker {WORKER_INDEX} Sent END message to filter_by_hour worker {i} via topic exchange", flush=True)
+                print(f"[filter_by_year] Worker {WORKER_INDEX} Sent END message for client {client_id} to filter_by_hour worker {i} via topic exchange", flush=True)
             
             # Send messages for Q4 workers
             for store_id in range(CATEGORIZER_Q4_WORKERS):
                 routing_key = f"store.{store_id % CATEGORIZER_Q4_WORKERS}"
                 q4_message, _ = build_message(client_id, type_of_message, 1, [])
                 categorizer_q4_topic_exchange.send(q4_message, routing_key=routing_key)
-                print(f"[filter_by_year] Sent END message to hour filter queue. routing_key={routing_key}")
+                print(f"[filter_by_year] Worker {WORKER_INDEX} client {client_id}: Sent END message to categorizer_q4 with routing_key={routing_key}")
 
             # Using topic instead of fanout so do not use the next code
             # end_message, _ = build_message(client_id, type_of_message, 1, [])
@@ -141,7 +141,7 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
         client_id = parsed_message['client_id']
         is_last = parsed_message['is_last']
 
-        # print(f"[filter_by_year] Worker {WORKER_INDEX} received transaction_items message with {len(parsed_message['rows'])} rows, is_last={is_last}")
+        print(f"[filter_by_year] Worker {WORKER_INDEX} received transaction_items message from client {client_id} with {len(parsed_message['rows'])} rows, is_last={is_last}")
 
         rows_by_month = defaultdict(list)
         for row in parsed_message['rows']:
@@ -159,7 +159,7 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
             if rows != []:
                 new_message, _ = build_message(client_id, type_of_message, 0, rows)
                 routing_key = f"month.{month}"
-                # print(f"[filter_by_year] Worker {WORKER_INDEX} Sending {len(rows)} rows for month {month} to categorizer_q2 with routing key {routing_key}")
+                print(f"[filter_by_year] Worker {WORKER_INDEX} client {client_id}: Sending {len(rows)} rows for month {month} to categorizer_q2 with routing key {routing_key}")
                 item_categorizer_exchange.send(new_message, routing_key=routing_key)
 
         if is_last == 1:
@@ -168,7 +168,7 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
             for month in range(1, 13):
                 routing_key = f"month.{month}"
                 item_categorizer_exchange.send(end_message, routing_key=routing_key)
-                print(f"[filter_by_year] Worker {WORKER_INDEX} Sent END message to categorizer_q2 with routing key {routing_key}.")
+                print(f"[filter_by_year] Worker {WORKER_INDEX} client {client_id}: Sent END message to categorizer_q2 with routing key {routing_key}")
     except Exception as e:
         print(f"[t_items] Worker {WORKER_INDEX} Error decoding message: {e}", file=sys.stderr)
 
@@ -276,10 +276,10 @@ def main():
                 
                 if is_last:
                     transactions_end_received += 1
-                    # print(f"[filter_by_year] Worker {WORKER_INDEX} received transactions END message {transactions_end_received}")
-                    if transactions_end_received >= 1:  # Expecting 1 END message from gateway
-                        # print(f"[filter_by_year] Worker {WORKER_INDEX} stopping transactions consumer")
-                        receiver_exchange_t.stop_consuming()
+                    parsed_msg = parse_message(message)
+                    client_id = parsed_msg['client_id']
+                    print(f"[filter_by_year] Worker {WORKER_INDEX} received transactions END message {transactions_end_received} from client {client_id}")
+                    # Don't stop consuming - keep processing messages from multiple clients
                 
                 on_message_callback_transactions(message, hour_filter_exchange, categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange)
             except Exception as e:
@@ -306,11 +306,9 @@ def main():
                 
                 if is_last:
                     transaction_items_end_received += 1
-                    print(f"[filter_by_year] Worker {WORKER_INDEX} received transaction_items END message {transaction_items_end_received}")
-                    if transaction_items_end_received >= 1:  # Expecting 1 END message from gateway
-                        print(f"[filter_by_year] Worker {WORKER_INDEX} stopping transaction_items consumer")
-                        receiver_exchange_t_items.stop_consuming()
-                        return
+                    client_id = parsed_message['client_id']
+                    print(f"[filter_by_year] Worker {WORKER_INDEX} received transaction_items END message {transaction_items_end_received} from client {client_id}")
+                    # Don't stop consuming - keep processing messages from multiple clients
                 
             except Exception as e:
                 print(f"[filter_by_year] Worker {WORKER_INDEX} Error in transaction_items callback: {e}", file=sys.stderr)

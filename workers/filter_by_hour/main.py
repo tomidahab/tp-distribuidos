@@ -27,6 +27,11 @@ rows_received = 0
 rows_sent_to_amount = 0
 rows_sent_to_q3 = 0
 end_messages_received = 0
+# Track END messages per client: {client_id: count}
+client_end_messages = defaultdict(int)
+completed_clients = set()
+client_end_messages = defaultdict(int)
+completed_clients = set()
 
 topic_middleware = None
 filter_by_amount_exchange = None
@@ -71,7 +76,7 @@ def filter_message_by_hour(parsed_message, start_hour: int, end_hour: int) -> li
         return []
 
 def on_message_callback(message: bytes, filter_by_amount_exchange, categorizer_q3_topic_exchange, categorizer_q3_fanout_exchange, should_stop):
-    global rows_received, rows_sent_to_amount, rows_sent_to_q3, end_messages_received
+    global rows_received, rows_sent_to_amount, rows_sent_to_q3, end_messages_received, client_end_messages, completed_clients
     
     if should_stop.is_set():  # Don't process if we're stopping
         return
@@ -81,6 +86,17 @@ def on_message_callback(message: bytes, filter_by_amount_exchange, categorizer_q
     type_of_message = parsed_message['csv_type']  
     client_id = parsed_message['client_id']
     is_last = int(parsed_message['is_last'])
+    
+    # Skip if client already completed
+    if client_id in completed_clients:
+        return
+    type_of_message = parsed_message['csv_type']  
+    client_id = parsed_message['client_id']
+    is_last = int(parsed_message['is_last'])
+    
+    # Skip if client already completed
+    if client_id in completed_clients:
+        return
     
     # Count incoming rows
     incoming_rows = len(parsed_message['rows'])
@@ -132,7 +148,7 @@ def on_message_callback(message: bytes, filter_by_amount_exchange, categorizer_q
                         semester_message, _ = build_message(client_id, type_of_message, 0, semester_rows)
                         categorizer_q3_topic_exchange.send(semester_message, routing_key=semester_key)
                         rows_sent_to_q3 += len(semester_rows)
-                        #print(f"[filter_by_hour] Worker {WORKER_INDEX} sent {len(semester_rows)} rows for {semester_key} to categorizer_q3 (total sent to q3: {rows_sent_to_q3})", flush=True)
+                        print(f"[filter_by_hour] Worker {WORKER_INDEX} sent {len(semester_rows)} rows for {semester_key} to categorizer_q3 (total sent to q3: {rows_sent_to_q3})", flush=True)
                 
         elif type_of_message == CSV_TYPES_REVERSE['transaction_items']:  # transaction_items
             print(f"[filter_by_hour] Worker {WORKER_INDEX} received a transaction_items message, that should never happen!", flush=True)
@@ -141,30 +157,31 @@ def on_message_callback(message: bytes, filter_by_amount_exchange, categorizer_q
 
     # Handle END message when last message is received
     if is_last == 1:
-        end_messages_received += 1
-        print(f"[filter_by_hour] Worker {WORKER_INDEX} received END message {end_messages_received}/{NUMBER_OF_YEAR_WORKERS} from filter_by_year", flush=True)
+        client_end_messages[client_id] += 1
+        end_messages_received += 1  # Keep global counter for logging
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} received END message {client_end_messages[client_id]}/{NUMBER_OF_YEAR_WORKERS} for client {client_id} (total END messages: {end_messages_received})", flush=True)
         
-        if end_messages_received >= NUMBER_OF_YEAR_WORKERS:
-            print(f"[filter_by_hour] Worker {WORKER_INDEX} received all END messages from filter_by_year workers. FINAL STATS: received={rows_received} rows, sent_to_amount={rows_sent_to_amount}, sent_to_q3={rows_sent_to_q3}", flush=True)
-            print(f"[filter_by_hour] Worker {WORKER_INDEX} about to send END message", flush=True)
+        # Check if this client has received all END messages
+        if client_end_messages[client_id] >= NUMBER_OF_YEAR_WORKERS:
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} client {client_id} received all END messages from filter_by_year workers. Sending END messages...", flush=True)
+            completed_clients.add(client_id)
+            
             try:
-                # Send END to filter_by_amount (to all workers)
+                # Send END to filter_by_amount (to all workers) for this specific client
                 end_message, _ = build_message(client_id, type_of_message, 1, [])
                 for i in range(NUMBER_OF_AMOUNT_WORKERS):
                     routing_key = f"transaction.{i}"
                     filter_by_amount_exchange.send(end_message, routing_key=routing_key)
-                    print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message to filter_by_amount worker {i} via topic exchange", flush=True)
+                    print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message for client {client_id} to filter_by_amount worker {i} via topic exchange", flush=True)
                 
-                # Send END to categorizer_q3 via fanout exchange (reaches all workers)
+                # Send END to categorizer_q3 via fanout exchange for this specific client
                 end_message, _ = build_message(client_id, type_of_message, 1, [])
                 categorizer_q3_fanout_exchange.send(end_message)
-                print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message to categorizer_q3 via fanout exchange", flush=True)
+                print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message for client {client_id} to categorizer_q3 via fanout exchange", flush=True)
             except Exception as e:
-                print(f"[filter_by_hour] Worker {WORKER_INDEX} ERROR sending END message: {e}", flush=True)
+                print(f"[filter_by_hour] Worker {WORKER_INDEX} ERROR sending END message for client {client_id}: {e}", flush=True)
                 import traceback
                 traceback.print_exc()
-            
-            should_stop.set()
 
 
 def make_on_message_callback(filter_by_amount_exchange, categorizer_q3_topic_exchange, categorizer_q3_fanout_exchange, should_stop):

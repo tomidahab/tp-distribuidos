@@ -41,7 +41,11 @@ def collect_files(folder):
     return datasets_list
 
 def main(folder):
-    client = Client()
+    # Get client ID from environment variable or use default
+    client_id = os.environ.get('CLIENT_ID', 'client_1')
+    logging.info(f"Starting client with ID: {client_id}")
+    
+    client = Client(client_id)
     time.sleep(60)  # Esperar a que RabbitMQ esté listo
     file_list = collect_files(folder)
     if not file_list:

@@ -51,19 +51,26 @@ def unpack_response_message(message: bytes) -> Tuple[int, str]:
     response = payload.decode("utf-8")
     return response_type, response
 
-def build_message(client_id: int, csv_type: int, is_last: int, rows: List[str]) -> Tuple[bytes, int]:
+def build_message(client_id, csv_type: int, is_last: int, rows: List[str]) -> Tuple[bytes, int]:
     """
     Arma un mensaje binario con el protocolo definido.
-    Header: 4 bytes client_id, 1 byte csv_type, 1 byte is_last
+    Header: 2 bytes client_id_len, client_id bytes, 1 byte csv_type, 1 byte is_last, 4 bytes payload_len
     Payload: rows en texto plano UTF-8 separados por \n, encodeado a bytes
     """
     assert 1 <= csv_type <= 5, "csv_type debe estar entre 1 y 5"
     assert is_last in (0, 1), "is_last debe ser 0 o 1"
+    
+    # Convert client_id to string if it's not already
+    client_id_str = str(client_id)
+    client_id_bytes = client_id_str.encode("utf-8")
+    client_id_len = len(client_id_bytes)
+    
     payload_text = "\n".join(rows)
     payload_bytes = payload_text.encode("utf-8")
-    # Encode payload length as 4 bytes (big endian)
     payload_len = len(payload_bytes)
-    header = struct.pack(">IBBI", client_id, csv_type, is_last, payload_len)
+    
+    # Header: 2 bytes client_id_len + client_id + 1 byte csv_type + 1 byte is_last + 4 bytes payload_len
+    header = struct.pack(">H", client_id_len) + client_id_bytes + struct.pack(">BBI", csv_type, is_last, payload_len)
     message = header + payload_bytes
     return message, len(message)
 
@@ -75,7 +82,7 @@ def message_to_text(message: bytes) -> str:
     payload = message[10:10+payload_len]
     return payload.decode("utf-8")
 
-def text_to_message(text: str, client_id: int, csv_type: int, is_last: int) -> Tuple[bytes, int]:
+def text_to_message(text: str, client_id, csv_type: int, is_last: int) -> Tuple[bytes, int]:
     """
     Convierte texto plano (rows separados por \n) a mensaje binario.
     """
@@ -86,10 +93,23 @@ def parse_message(message: bytes) -> Dict:
     """
     Parsea el mensaje binario y devuelve un dict con los campos y las rows.
     """
-    client_id, csv_type, is_last, payload_len = struct.unpack(">IBBI", message[:10])
-    payload = message[10:10+payload_len]
+    # Read client_id_len (2 bytes)
+    client_id_len = struct.unpack(">H", message[:2])[0]
+    
+    # Read client_id (client_id_len bytes)
+    client_id_bytes = message[2:2+client_id_len]
+    client_id = client_id_bytes.decode("utf-8")
+    
+    # Read csv_type, is_last, payload_len
+    offset = 2 + client_id_len
+    csv_type, is_last, payload_len = struct.unpack(">BBI", message[offset:offset+6])
+    
+    # Read payload
+    payload_offset = offset + 6
+    payload = message[payload_offset:payload_offset+payload_len]
     payload_text = payload.decode("utf-8")
     rows = payload_text.split("\n") if payload_text else []
+    
     return {
         "client_id": client_id,
         "csv_type": csv_type,
@@ -98,19 +118,33 @@ def parse_message(message: bytes) -> Dict:
         "rows": rows
     }
 
-def get_client_id(message: bytes) -> int:
-    return struct.unpack(">I", message[:4])[0]
+def get_client_id(message: bytes) -> str:
+    """Get client_id from message header"""
+    client_id_len = struct.unpack(">H", message[:2])[0]
+    client_id_bytes = message[2:2+client_id_len]
+    return client_id_bytes.decode("utf-8")
 
 def get_csv_type(message: bytes) -> int:
-    return struct.unpack(">B", message[4:5])[0]
+    """Get csv_type from message header"""
+    client_id_len = struct.unpack(">H", message[:2])[0]
+    offset = 2 + client_id_len
+    return struct.unpack(">B", message[offset:offset+1])[0]
 
 def get_is_last(message: bytes) -> int:
-    return struct.unpack(">B", message[5:6])[0]
+    """Get is_last from message header"""
+    client_id_len = struct.unpack(">H", message[:2])[0]
+    offset = 2 + client_id_len + 1
+    return struct.unpack(">B", message[offset:offset+1])[0]
 
 def get_rows(message: bytes) -> List[str]:
-    payload_len = struct.unpack(">I", message[6:10])[0]
-    payload = message[10:10+payload_len]
-    return payload.decode("utf-8").split("\n") if payload else []
+    """Get rows from message payload"""
+    client_id_len = struct.unpack(">H", message[:2])[0]
+    offset = 2 + client_id_len
+    csv_type, is_last, payload_len = struct.unpack(">BBI", message[offset:offset+6])
+    payload_offset = offset + 6
+    payload = message[payload_offset:payload_offset+payload_len]
+    payload_text = payload.decode("utf-8")
+    return payload_text.split("\n") if payload_text else []
 
 
 # Ejemplo de uso

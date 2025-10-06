@@ -1,6 +1,7 @@
 import os
 import signal
 import sys
+from collections import defaultdict
 from time import sleep
 from common.protocol import parse_message, row_to_dict, build_message
 from common.middleware import MessageMiddlewareQueue, MessageMiddlewareExchange, MessageMiddlewareDisconnectedError, MessageMiddlewareMessageError
@@ -16,7 +17,9 @@ NUMBER_OF_HOUR_WORKERS = int(os.environ.get('NUMBER_OF_HOUR_WORKERS', '3'))
 # Global counters for debugging
 rows_received = 0
 rows_sent = 0
-end_messages_received = 0
+# Track END messages per client: {client_id: count}
+client_end_messages = defaultdict(int)
+completed_clients = set()
 
 queue_result = None
 topic_middleware = None
@@ -47,7 +50,7 @@ def filter_message_by_amount(parsed_message, min_amount: float) -> list:
         return []
 
 def on_message_callback(message: bytes, topic_middleware, should_stop):
-    global rows_received, rows_sent, end_messages_received
+    global rows_received, rows_sent, client_end_messages, completed_clients
     
     if should_stop.is_set():  # Don't process if we're stopping
         return
@@ -58,36 +61,38 @@ def on_message_callback(message: bytes, topic_middleware, should_stop):
     client_id = parsed_message['client_id']
     is_last = parsed_message['is_last']
     
+    # Skip if client already completed
+    if client_id in completed_clients:
+        return
+    
     # Count incoming rows
     incoming_rows = len(parsed_message['rows'])
     rows_received += incoming_rows
     # print(f"[filter_by_amount] Worker {WORKER_INDEX} received {incoming_rows} rows (total received: {rows_received})", flush=True)
     
     if is_last:
-        end_messages_received += 1
-        print(f"[filter_by_amount] Worker {WORKER_INDEX} received END message {end_messages_received}/{NUMBER_OF_HOUR_WORKERS}", flush=True)
+        client_end_messages[client_id] += 1
+        print(f"[filter_by_amount] Worker {WORKER_INDEX} received END message {client_end_messages[client_id]}/{NUMBER_OF_HOUR_WORKERS} for client {client_id}", flush=True)
     
     filtered_rows = filter_message_by_amount(parsed_message, MIN_AMOUNT)
     
-    if filtered_rows or (is_last and end_messages_received == NUMBER_OF_HOUR_WORKERS):
+    # Check if this client has completed (received all END messages)
+    client_completed = client_end_messages[client_id] >= NUMBER_OF_HOUR_WORKERS
+    
+    if filtered_rows or (is_last and client_completed):
         global queue_result
         # Create result queue for each message to avoid connection conflicts
         queue_result = MessageMiddlewareQueue(RABBITMQ_HOST, RESULT_QUEUE)
         
-        # Only send is_last=1 if we've received all END messages from filter_by_hour workers
-        final_is_last = 1 if (is_last and end_messages_received == NUMBER_OF_HOUR_WORKERS) else 0
+        # Only send is_last=1 if this client has received all END messages
+        final_is_last = 1 if (is_last and client_completed) else 0
         new_message, _ = build_message(client_id, type_of_message, final_is_last, filtered_rows)
         queue_result.send(new_message)
         queue_result.close()
         
         # Count outgoing rows
         rows_sent += len(filtered_rows)
-        # print(f"[filter_by_amount] Worker {WORKER_INDEX} sent {len(filtered_rows)} filtered rows (total sent: {rows_sent}), final_is_last={final_is_last}", flush=True)
-    
-    if is_last and end_messages_received == NUMBER_OF_HOUR_WORKERS:
-        print(f"[filter_by_amount] Worker {WORKER_INDEX} received all END messages. FINAL STATS: received={rows_received} rows, sent={rows_sent} rows", flush=True)
-        should_stop.set()
-        topic_middleware.stop_consuming()
+        print(f"[filter_by_amount] Worker {WORKER_INDEX} sent {len(filtered_rows)} filtered rows for client {client_id}, final_is_last={final_is_last}", flush=True)
 
 
 def make_on_message_callback(topic_middleware, should_stop):

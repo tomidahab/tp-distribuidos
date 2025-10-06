@@ -12,11 +12,13 @@ SERVER_PORT = 5000
 CHUNK_TARGET = 4096
 
 class Client:
-    def __init__(self):
+    def __init__(self, client_id="client_1"):
+        self.client_id = client_id
         self.skt = None
         self.current_file = None
         signal.signal(signal.SIGTERM, self._sigterm_handler)
         signal.signal(signal.SIGINT, self._sigterm_handler)
+        logging.info(f"Initialized client with ID: {self.client_id}")
 
     def _sigterm_handler(self, signum, _):
         if self.skt:
@@ -118,7 +120,12 @@ class Client:
         try:
             self.skt = socket(AF_INET, SOCK_STREAM)
             self.skt.connect((SERVER_HOST, SERVER_PORT))
-            logging.info(f"Conectado a {SERVER_HOST}:{SERVER_PORT}")
+            logging.info(f"Client {self.client_id} connected to {SERVER_HOST}:{SERVER_PORT}")
+            
+            # Send client_id to gateway first thing after connection
+            send_h_str(self.skt, self.client_id)
+            logging.info(f"Sent client_id '{self.client_id}' to gateway")
+            
             for data_set_files in data_sets[:-1]:
                 for file in data_set_files[:-1]:
                     self._send_file(file, False, False)
