@@ -157,7 +157,7 @@ def listen_for_sales(items, topic_middleware):
                 # print(f"[categorizer_q2] Updated stats for {key}: {sales_stats[key]}")  # Too verbose
             if is_last:
                 end_messages_received += 1
-                # print(f"[categorizer_q2] Received END message {end_messages_received}/{NUMBER_OF_YEAR_WORKERS} from filter_by_year workers")
+                print(f"[categorizer_q2] Received END message {end_messages_received}/{NUMBER_OF_YEAR_WORKERS} from filter_by_year workers")
                 if end_messages_received >= NUMBER_OF_YEAR_WORKERS:
                     print(f"[categorizer_q2] Received all END messages from {NUMBER_OF_YEAR_WORKERS} filter_by_year workers, stopping sales collection.")
                     queue.stop_consuming()
