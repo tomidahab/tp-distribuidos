@@ -26,9 +26,9 @@ categorizer_query2_items_exchange = None
 
 birth_dic_data_responses_queue = None
 
-# Round-robin counters for distributing messages across workers
-transactions_worker_counter = 0
-transaction_items_worker_counter = 0
+# Round-robin counters for distributing messages across workers - PER CLIENT
+transactions_worker_counter = {}  # client_id -> counter
+transaction_items_worker_counter = {}  # client_id -> counter
 
 
 def recv_lines_batch(skt: socket):
@@ -78,12 +78,14 @@ def handle_and_forward_chunk(client_id: str, csv_type: int, is_last: int, chunk:
                             ""  # Empty queue name since we're only sending
                         )
                     
-                    # Round-robin distribution to workers
-                    worker_index = transaction_items_worker_counter % NUMBER_OF_YEAR_WORKERS
+                    # Round-robin distribution to workers - PER CLIENT
+                    if client_id not in transaction_items_worker_counter:
+                        transaction_items_worker_counter[client_id] = 0
+                    worker_index = transaction_items_worker_counter[client_id] % NUMBER_OF_YEAR_WORKERS
                     routing_key = f"year.{worker_index}"
                     filter_by_year_transaction_items_exchange.send(message, routing_key=routing_key)
-                    transaction_items_worker_counter += 1
-                    # print(f"[gateway_protocol] Sent transaction_items to worker {worker_index} with routing key {routing_key}", flush=True)
+                    transaction_items_worker_counter[client_id] += 1
+                    print(f"[gateway_protocol] Sent transaction_items from {client_id} to worker {worker_index} with routing key {routing_key} (counter: {transaction_items_worker_counter[client_id]})", flush=True)
                     break
                 except Exception as e:
                     # print(f"[gateway_protocol] Retry {attempt+1}/{MAX_RETRIES} for transaction_items exchange: {e}", file=sys.stderr)
@@ -104,12 +106,14 @@ def handle_and_forward_chunk(client_id: str, csv_type: int, is_last: int, chunk:
                             ""  # Empty queue name since we're only sending
                         )
                     
-                    # Round-robin distribution to workers
-                    worker_index = transactions_worker_counter % NUMBER_OF_YEAR_WORKERS
+                    # Round-robin distribution to workers - PER CLIENT
+                    if client_id not in transactions_worker_counter:
+                        transactions_worker_counter[client_id] = 0
+                    worker_index = transactions_worker_counter[client_id] % NUMBER_OF_YEAR_WORKERS
                     routing_key = f"year.{worker_index}"
                     filter_by_year_transactions_exchange.send(message, routing_key=routing_key)
-                    transactions_worker_counter += 1
-                    # print(f"[gateway_protocol] Sent transactions to worker {worker_index} with routing key {routing_key}", flush=True)
+                    transactions_worker_counter[client_id] += 1
+                    print(f"[gateway_protocol] Sent transactions from {client_id} to worker {worker_index} with routing key {routing_key} (counter: {transactions_worker_counter[client_id]})", flush=True)
                     break
                 except Exception as e:
                     # print(f"[gateway_protocol] Retry {attempt+1}/{MAX_RETRIES} for transactions exchange: {e}", file=sys.stderr)

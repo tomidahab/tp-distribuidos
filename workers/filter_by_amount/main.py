@@ -21,6 +21,14 @@ rows_sent = 0
 client_end_messages = defaultdict(int)
 completed_clients = set()
 
+# Track detailed stats per client
+client_stats = defaultdict(lambda: {
+    'messages_received': 0,
+    'rows_received': 0,
+    'rows_sent': 0,
+    'end_messages_received': 0
+})
+
 queue_result = None
 topic_middleware = None
 
@@ -50,7 +58,7 @@ def filter_message_by_amount(parsed_message, min_amount: float) -> list:
         return []
 
 def on_message_callback(message: bytes, topic_middleware, should_stop):
-    global rows_received, rows_sent, client_end_messages, completed_clients
+    global rows_received, rows_sent, client_end_messages, completed_clients, client_stats
     
     if should_stop.is_set():  # Don't process if we're stopping
         return
@@ -65,21 +73,31 @@ def on_message_callback(message: bytes, topic_middleware, should_stop):
     if client_id in completed_clients:
         return
     
+    # Update client stats
+    client_stats[client_id]['messages_received'] += 1
+    client_stats[client_id]['rows_received'] += len(parsed_message['rows'])
+    
     # Count incoming rows
     incoming_rows = len(parsed_message['rows'])
     rows_received += incoming_rows
-    # print(f"[filter_by_amount] Worker {WORKER_INDEX} received {incoming_rows} rows (total received: {rows_received})", flush=True)
+    
+    print(f"[filter_by_amount] Worker {WORKER_INDEX} received message from client {client_id} with {incoming_rows} rows, is_last={is_last} (total msgs: {client_stats[client_id]['messages_received']}, total rows: {client_stats[client_id]['rows_received']})")
     
     if is_last:
+        client_stats[client_id]['end_messages_received'] += 1
         client_end_messages[client_id] += 1
         print(f"[filter_by_amount] Worker {WORKER_INDEX} received END message {client_end_messages[client_id]}/{NUMBER_OF_HOUR_WORKERS} for client {client_id}", flush=True)
     
     filtered_rows = filter_message_by_amount(parsed_message, MIN_AMOUNT)
     
+    print(f"[filter_by_amount] Worker {WORKER_INDEX} client {client_id}: {len(filtered_rows)} rows passed amount filter (from {len(parsed_message['rows'])} input rows)")
+    
     # Check if this client has completed (received all END messages)
     client_completed = client_end_messages[client_id] >= NUMBER_OF_HOUR_WORKERS
     
     if filtered_rows or (is_last and client_completed):
+        client_stats[client_id]['rows_sent'] += len(filtered_rows)
+        
         global queue_result
         # Create result queue for each message to avoid connection conflicts
         queue_result = MessageMiddlewareQueue(RABBITMQ_HOST, RESULT_QUEUE)
@@ -92,7 +110,13 @@ def on_message_callback(message: bytes, topic_middleware, should_stop):
         
         # Count outgoing rows
         rows_sent += len(filtered_rows)
-        print(f"[filter_by_amount] Worker {WORKER_INDEX} sent {len(filtered_rows)} filtered rows for client {client_id}, final_is_last={final_is_last}", flush=True)
+        print(f"[filter_by_amount] Worker {WORKER_INDEX} sent {len(filtered_rows)} filtered rows for client {client_id}, final_is_last={final_is_last} (total sent: {client_stats[client_id]['rows_sent']})", flush=True)
+        
+        # Print summary when client completes
+        if final_is_last == 1:
+            completed_clients.add(client_id)
+            stats = client_stats[client_id]
+            print(f"[filter_by_amount] Worker {WORKER_INDEX} SUMMARY for client {client_id}: messages_received={stats['messages_received']}, rows_received={stats['rows_received']}, rows_sent={stats['rows_sent']}, end_messages_received={stats['end_messages_received']}")
 
 
 def make_on_message_callback(topic_middleware, should_stop):

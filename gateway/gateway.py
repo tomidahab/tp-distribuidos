@@ -355,6 +355,9 @@ class Gateway:
             logging.error(f"[{result_queue}] Error consumiendo mensajes: {e}")
 
     def receive_datasets(self, client_socket, client_id):
+        total_files_received = 0
+        total_bytes_received = 0
+        
         while True:
             # NOTE: `recv` is unreliable, and `recv_all` guarantees that we will either receive all the bytes
             # or raise a ConnectionError. Therefore, we should not treat it as a function that can return None.
@@ -365,12 +368,15 @@ class Gateway:
             last_file = recv_bool(client_socket)
             last_dataset = recv_bool(client_socket)
             
+            logging.info(f"[CLIENT {client_id}] Starting to receive file: {filename} ({filesize} bytes), last_file={last_file}, last_dataset={last_dataset}")
+            
             # Add client_id to filename to separate client data
             base_filename, ext = os.path.splitext(filename)
             client_filename = f"{base_filename}_client_{client_id}{ext}"
             filepath = os.path.join(OUTPUT_DIR, client_filename)
 
             received = 0
+            chunks_processed = 0
             with open(filepath, "wb") as f:
                 file_code = filename_to_type(filename)
                 while received < filesize:
@@ -378,14 +384,23 @@ class Gateway:
                     if self.stop_by_sigterm:
                         return
                     f.write(chunk)
-                    received += len(chunk)  
-                    if file_code == 1:
-                        logging.info(f"[CLIENT {client_id}] Receiving chunk for file {filename}, total received: {received}/{filesize} bytes, len: {len(chunk)}")
+                    received += len(chunk)
+                    chunks_processed += 1
+                    
+                    if file_code in [1, 2]:  # transactions or transaction_items
+                        if chunks_processed % 10 == 0 or received >= filesize:  # Log every 10th chunk or at end
+                            logging.info(f"[CLIENT {client_id}] Processing chunk {chunks_processed} for {filename}, received: {received}/{filesize} bytes")
+                    
                     if len(chunk) != 0:
                         handle_and_forward_chunk(client_id, file_code, 1 if received >= filesize and last_file else 0, chunk)
 
-            logging.info(f"[CLIENT {client_id}] Archivo recibido: {filename} ({filesize} bytes)")
+            total_files_received += 1
+            total_bytes_received += filesize
+            logging.info(f"[CLIENT {client_id}] File completed: {filename} ({filesize} bytes), chunks processed: {chunks_processed}")
+            logging.info(f"[CLIENT {client_id}] Progress: {total_files_received} files, {total_bytes_received} total bytes received")
+            
             if last_file and last_dataset:
+                logging.info(f"[CLIENT {client_id}] All datasets received - total files: {total_files_received}, total bytes: {total_bytes_received}")
                 break
 
     def handle_client(self, addr):

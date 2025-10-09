@@ -33,6 +33,16 @@ topic_middleware = None
 items_exchange = None
 gateway_result_queue = None
 
+# Track detailed stats per client
+client_stats = defaultdict(lambda: {
+    'transactions_messages_received': 0,
+    'transaction_items_messages_received': 0,
+    'transactions_rows_received': 0,
+    'transaction_items_rows_received': 0,
+    'transactions_end_received': 0,
+    'transaction_items_end_received': 0
+})
+
 def _close_queue(queue):
     if queue:
         queue.close()
@@ -95,17 +105,25 @@ def listen_for_items():
         return items
 
     def on_message_callback(message: bytes):
+        global client_stats
         try:
             parsed_message = parse_message(message)
             type_of_message = parsed_message['csv_type']  
             client_id = parsed_message['client_id']
             is_last = parsed_message['is_last']
+            
+            client_stats[client_id]['transaction_items_messages_received'] += 1
+            client_stats[client_id]['transaction_items_rows_received'] += len(parsed_message['rows'])
+            
+            print(f"[categorizer_q2] Worker {WORKER_INDEX} received items message from client {client_id} with {len(parsed_message['rows'])} rows, is_last={is_last}")
+            
             for row in parsed_message['rows']:
                 dic_fields_row = row_to_dict(row, type_of_message)
                 items.append({'item_id': str(dic_fields_row['item_id']), 'item_name': dic_fields_row['item_name']})
 
             if is_last:
-                print("[categorizer_q2] Received end message, stopping item collection.")
+                client_stats[client_id]['transaction_items_end_received'] += 1
+                print(f"[categorizer_q2] Worker {WORKER_INDEX} received items END message from client {client_id}, stopping item collection.")
                 items_exchange.stop_consuming()
         except Exception as e:
             print(f"[categorizer_q2] Error processing item message: {e}", file=sys.stderr)
@@ -140,6 +158,7 @@ def listen_for_sales(items, topic_middleware):
 
     def on_message_callback(message: bytes):
         nonlocal completed_clients
+        global client_stats
         try:
             parsed_message = parse_message(message)
             type_of_message = parsed_message['csv_type']  
@@ -149,8 +168,11 @@ def listen_for_sales(items, topic_middleware):
             # Skip if client already completed
             if client_id in completed_clients:
                 return
-                
-            # print(f"[categorizer_q2] Received transaction message for client {client_id}, csv_type: {type_of_message}, is_last: {is_last}, rows: {len(parsed_message['rows'])}")
+            
+            client_stats[client_id]['transactions_messages_received'] += 1
+            client_stats[client_id]['transactions_rows_received'] += len(parsed_message['rows'])
+            
+            print(f"[categorizer_q2] Worker {WORKER_INDEX} received transactions message from client {client_id} with {len(parsed_message['rows'])} rows, is_last={is_last} (total msgs: {client_stats[client_id]['transactions_messages_received']}, total rows: {client_stats[client_id]['transactions_rows_received']})")
             
             for row in parsed_message['rows']:
                 dic_fields_row = row_to_dict(row, type_of_message)
@@ -164,19 +186,24 @@ def listen_for_sales(items, topic_middleware):
                 client_sales_stats[client_id][(item_id, year, month)]['sum'] += profit
                 
             if is_last:
+                client_stats[client_id]['transactions_end_received'] += 1
                 client_end_messages[client_id] += 1
-                print(f"[categorizer_q2] Received END message {client_end_messages[client_id]}/{NUMBER_OF_YEAR_WORKERS} for client {client_id}")
+                print(f"[categorizer_q2] Worker {WORKER_INDEX} received END message {client_end_messages[client_id]}/{NUMBER_OF_YEAR_WORKERS} for client {client_id}")
                 
                 if client_end_messages[client_id] >= NUMBER_OF_YEAR_WORKERS:
-                    print(f"[categorizer_q2] Client {client_id} received all END messages, processing results")
+                    print(f"[categorizer_q2] Worker {WORKER_INDEX} client {client_id} received all END messages, processing results")
                     completed_clients.add(client_id)
+                    
+                    # Print summary stats for this client
+                    stats = client_stats[client_id]
+                    print(f"[categorizer_q2] Worker {WORKER_INDEX} SUMMARY for client {client_id}: transactions_messages_received={stats['transactions_messages_received']}, transactions_rows_received={stats['transactions_rows_received']}, transaction_items_messages_received={stats['transaction_items_messages_received']}, transaction_items_rows_received={stats['transaction_items_rows_received']}")
                     
                     # Process and send results for this client
                     send_client_q2_results(client_id, client_sales_stats[client_id], items)
                     
                     # Don't delete client data yet - keep it for potential debugging
                     # but mark as completed
-                    print(f"[categorizer_q2] Client {client_id} processing completed")
+                    print(f"[categorizer_q2] Worker {WORKER_INDEX} client {client_id} processing completed")
                     
                     # Simple stopping condition: if we've processed some clients and no new messages 
                     # are coming for a while, we can assume all clients are done
