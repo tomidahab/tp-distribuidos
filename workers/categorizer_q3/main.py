@@ -101,8 +101,9 @@ def listen_for_transactions():
             client_id = parsed_message['client_id']
             is_last = parsed_message['is_last']
             
-            # Skip if client already completed
+            # Skip if client already completed - check BEFORE any processing
             if client_id in completed_clients:
+                print(f"[categorizer_q3] Worker {WORKER_INDEX} ignoring message from already completed client {client_id}")
                 return
             
             print(f"[categorizer_q3] Worker {WORKER_INDEX} processing message for client {client_id}, is_last: {is_last}, rows: {len(parsed_message['rows'])}", flush=True)

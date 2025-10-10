@@ -250,6 +250,7 @@ class Gateway:
             except:
                 pass
             logging.info(f"[CLIENT {client_id}] Connection closed")
+            
     def listen_for_q4_requests(self):
         sleep(config.MIDDLEWARE_UP_TIME)  # Esperar a que RabbitMQ esté listo
         queue = MessageMiddlewareQueue(os.environ.get('RABBITMQ_HOST', 'rabbitmq_server'), Q4_DATA_REQUESTS_QUEUE)
