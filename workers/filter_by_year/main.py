@@ -210,7 +210,8 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
             
             end_message, _ = build_message(client_id, type_of_message, is_last, [])
             # Send END message to all months (1-12) to ensure all categorizer_q2 workers receive it
-            for month in range(1, 13):
+            # Sending this with (1, 13) range will make a categorizer receive the 3 messages that need to pass
+            for month in range(1, 13, 13 // NUMBER_OF_Q2_CATEGORIZER_WORKERS):
                 routing_key = f"month.{month}"
                 item_categorizer_exchange.send(end_message, routing_key=routing_key)
                 print(f"[filter_by_year] Worker {WORKER_INDEX} client {client_id}: Sent END message to categorizer_q2 with routing key {routing_key}")

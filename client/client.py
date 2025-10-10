@@ -104,8 +104,8 @@ class Client:
         top_profit_display = DisplayTable([("Year-Month", 10), ("Item name", 10), ("Profit sum", 10)])
         top_profit_display.display_header()
         for year in sorted(top_profit_results.keys()):
-            month, top_count_item_name, top_sum = sorted(top_profit_results[year], key=lambda x: x[2], reverse=True)[0]
-            top_profit_display.display_row([f"{year}-{month}", top_count_item_name, top_count])
+            month, top_sum_item_name, top_sum = sorted(top_profit_results[year], key=lambda x: x[2], reverse=True)[0]
+            top_profit_display.display_row([f"{year}-{month}", top_sum_item_name, top_sum])
 
     def get_q1_display(self) -> DisplayTable:
         return DisplayTable([("Transaction ID", 16), ("Store ID", 10), ("PM ID", 10), ("Voucher ID", 10), ("User ID", 10), ("Original #", 10), ("Discount", 10), ("Final #", 10), ("Created at", 19)])

@@ -83,6 +83,7 @@ def handle_and_forward_chunk(client_id: str, csv_type: int, is_last: int, chunk:
                         transaction_items_worker_counter[client_id] = 0
                     worker_index = transaction_items_worker_counter[client_id] % NUMBER_OF_YEAR_WORKERS
                     routing_key = f"year.{worker_index}"
+                    # NOTE: that from here, we are already sending an is_last message to a worker (but also sending to all in send_end_messages_to_filter_by_year() so 1 of the workers will receive the is_last flasg 2 times)
                     filter_by_year_transaction_items_exchange.send(message, routing_key=routing_key)
                     transaction_items_worker_counter[client_id] += 1
                     print(f"[gateway_protocol] Sent transaction_items from {client_id} to worker {worker_index} with routing key {routing_key} (counter: {transaction_items_worker_counter[client_id]})", flush=True)
