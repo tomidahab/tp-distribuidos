@@ -20,9 +20,18 @@ class MessageMiddleware(ABC):
         self.connection = None
         self.channel = None
         self.consuming = False
+        self._auto_close = False  # Don't auto-close for multi-client support
 
         try:
-            self.connection = pika.BlockingConnection(pika.ConnectionParameters(host=self.host))
+            # Use persistent connection parameters for multi-client support
+            connection_params = pika.ConnectionParameters(
+                host=self.host,
+                heartbeat=600,  # 10 minute heartbeat for long-running connections
+                blocked_connection_timeout=300,  # 5 minute timeout
+                connection_attempts=5,
+                retry_delay=2
+            )
+            self.connection = pika.BlockingConnection(connection_params)
             self.channel = self.connection.channel()
             self.channel.queue_declare(queue=self.queue_name, durable=True)
         except Exception as e:
@@ -73,14 +82,29 @@ class MessageMiddleware(ABC):
         except Exception as e:
             raise MessageMiddlewareMessageError(f"Error sending message: {e}")
 
+    def stop_consuming(self):
+        """Stop consuming without closing connection for multi-client support"""
+        if self.consuming and self.channel:
+            try:
+                self.channel.stop_consuming()
+                self.consuming = False
+                print(f"[middleware] Stopped consuming on queue {self.queue_name}", flush=True)
+            except Exception as e:
+                print(f"[middleware] Error stopping consumption: {e}")
+                # Don't raise exception to avoid breaking multi-client flow
+    
     def close(self):
+        """Close connection only when explicitly called"""
         try:
-            if self.channel:
+            self.stop_consuming()
+            if self.channel and not self.channel.is_closed:
                 self.channel.close()
-            if self.connection:
+            if self.connection and not self.connection.is_closed:
                 self.connection.close()
+            print(f"[middleware] Closed connection for queue {self.queue_name}", flush=True)
         except Exception as e:
-            raise MessageMiddlewareCloseError(f"Error closing connection: {e}")
+            print(f"[middleware] Error closing connection: {e}")
+            # Don't raise exception to avoid breaking shutdown
 
     def delete(self):
         try:

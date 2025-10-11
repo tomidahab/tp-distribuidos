@@ -27,6 +27,19 @@ rows_received = 0
 rows_sent_to_amount = 0
 rows_sent_to_q3 = 0
 end_messages_received = 0
+# Track END messages per client: {client_id: count}
+client_end_messages = defaultdict(int)
+completed_clients = set()
+
+# Track detailed stats per client
+client_stats = defaultdict(lambda: {
+    'messages_received': 0,
+    'rows_received': 0,
+    'rows_sent_to_amount': 0,
+    'rows_sent_to_q3': 0,
+    'end_messages_received': 0,
+    'amount_worker_counter': 0  # Per-client counter for amount workers
+})
 
 topic_middleware = None
 filter_by_amount_exchange = None
@@ -71,7 +84,7 @@ def filter_message_by_hour(parsed_message, start_hour: int, end_hour: int) -> li
         return []
 
 def on_message_callback(message: bytes, filter_by_amount_exchange, categorizer_q3_topic_exchange, categorizer_q3_fanout_exchange, should_stop):
-    global rows_received, rows_sent_to_amount, rows_sent_to_q3, end_messages_received
+    global rows_received, rows_sent_to_amount, rows_sent_to_q3, end_messages_received, client_end_messages, completed_clients, client_stats
     
     if should_stop.is_set():  # Don't process if we're stopping
         return
@@ -82,6 +95,17 @@ def on_message_callback(message: bytes, filter_by_amount_exchange, categorizer_q
     client_id = parsed_message['client_id']
     is_last = int(parsed_message['is_last'])
     
+    # Skip if client already completed - check BEFORE updating any stats
+    if client_id in completed_clients:
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} SKIPPING message from completed client {client_id} with {len(parsed_message['rows'])} rows, is_last={is_last}")
+        return
+    
+    # Update client stats
+    client_stats[client_id]['messages_received'] += 1
+    client_stats[client_id]['rows_received'] += len(parsed_message['rows'])
+    
+    print(f"[filter_by_hour] Worker {WORKER_INDEX} received message from client {client_id} with {len(parsed_message['rows'])} rows, is_last={is_last} (total msgs: {client_stats[client_id]['messages_received']}, total rows: {client_stats[client_id]['rows_received']})")
+    
     # Count incoming rows
     incoming_rows = len(parsed_message['rows'])
     rows_received += incoming_rows
@@ -89,19 +113,25 @@ def on_message_callback(message: bytes, filter_by_amount_exchange, categorizer_q
     
     filtered_rows = filter_message_by_hour(parsed_message, START_HOUR, END_HOUR)
 
-    # print(f"[filter_by_hour] Worker {WORKER_INDEX} filtered message: {len(filtered_rows)} rows remaining, is_last={is_last}", flush=True)
+    print(f"[filter_by_hour] Worker {WORKER_INDEX} client {client_id}: {len(filtered_rows)} rows passed hour filter (from {len(parsed_message['rows'])} input rows)")
 
     if (len(filtered_rows) != 0) or (is_last == 1):
         # For Q1 - send to filter_by_amount exchange
         if type_of_message == CSV_TYPES_REVERSE['transactions']:  # transactions
             # Route by transaction_id for load balancing
             if filtered_rows:
-                # Group rows by worker to send in batches instead of one by one
+                client_stats[client_id]['rows_sent_to_amount'] += len(filtered_rows)
+                
+                # Group rows by worker to send in batches using per-client counter
                 rows_by_worker = defaultdict(list)
                 for i, row in enumerate(filtered_rows):
-                    worker_index = i % NUMBER_OF_AMOUNT_WORKERS  # Simple round robin by row index
+                    # Use per-client counter for deterministic distribution
+                    worker_index = (client_stats[client_id]['amount_worker_counter'] + i) % NUMBER_OF_AMOUNT_WORKERS
                     routing_key = f"transaction.{worker_index}"
                     rows_by_worker[routing_key].append(row)
+                
+                # Update per-client counter (DON'T mod here, just increment)
+                client_stats[client_id]['amount_worker_counter'] += len(filtered_rows)
                 
                 # Send batched messages to each worker
                 for routing_key, worker_rows in rows_by_worker.items():
@@ -109,10 +139,13 @@ def on_message_callback(message: bytes, filter_by_amount_exchange, categorizer_q
                         new_message, _ = build_message(client_id, type_of_message, 0, worker_rows)
                         filter_by_amount_exchange.send(new_message, routing_key=routing_key)
                         rows_sent_to_amount += len(worker_rows)
+                        print(f"[filter_by_hour] Worker {WORKER_INDEX} client {client_id}: Sent {len(worker_rows)} rows to filter_by_amount {routing_key} (total sent to amount: {client_stats[client_id]['rows_sent_to_amount']}, counter at: {client_stats[client_id]['amount_worker_counter']})")
                         # print(f"[filter_by_hour] Worker {WORKER_INDEX} sent {len(worker_rows)} rows to {routing_key} (total sent to amount: {rows_sent_to_amount})", flush=True)
             
             # For Q3 - group by semester and send to topic exchange
             if filtered_rows:  # Only process if there are rows
+                client_stats[client_id]['rows_sent_to_q3'] += len(filtered_rows)
+                
                 rows_by_semester = defaultdict(list)
                 for row in filtered_rows:
                     dic_fields_row = row_to_dict(row, type_of_message)
@@ -132,7 +165,7 @@ def on_message_callback(message: bytes, filter_by_amount_exchange, categorizer_q
                         semester_message, _ = build_message(client_id, type_of_message, 0, semester_rows)
                         categorizer_q3_topic_exchange.send(semester_message, routing_key=semester_key)
                         rows_sent_to_q3 += len(semester_rows)
-                        #print(f"[filter_by_hour] Worker {WORKER_INDEX} sent {len(semester_rows)} rows for {semester_key} to categorizer_q3 (total sent to q3: {rows_sent_to_q3})", flush=True)
+                        print(f"[filter_by_hour] Worker {WORKER_INDEX} client {client_id}: Sent {len(semester_rows)} rows for {semester_key} to categorizer_q3 (total sent to q3: {client_stats[client_id]['rows_sent_to_q3']})")
                 
         elif type_of_message == CSV_TYPES_REVERSE['transaction_items']:  # transaction_items
             print(f"[filter_by_hour] Worker {WORKER_INDEX} received a transaction_items message, that should never happen!", flush=True)
@@ -141,30 +174,36 @@ def on_message_callback(message: bytes, filter_by_amount_exchange, categorizer_q
 
     # Handle END message when last message is received
     if is_last == 1:
-        end_messages_received += 1
-        print(f"[filter_by_hour] Worker {WORKER_INDEX} received END message {end_messages_received}/{NUMBER_OF_YEAR_WORKERS} from filter_by_year", flush=True)
+        client_stats[client_id]['end_messages_received'] += 1
+        client_end_messages[client_id] += 1
+        end_messages_received += 1  # Keep global counter for logging
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} received END message {client_end_messages[client_id]}/{NUMBER_OF_YEAR_WORKERS} for client {client_id} (total END messages: {end_messages_received})", flush=True)
         
-        if end_messages_received >= NUMBER_OF_YEAR_WORKERS:
-            print(f"[filter_by_hour] Worker {WORKER_INDEX} received all END messages from filter_by_year workers. FINAL STATS: received={rows_received} rows, sent_to_amount={rows_sent_to_amount}, sent_to_q3={rows_sent_to_q3}", flush=True)
-            print(f"[filter_by_hour] Worker {WORKER_INDEX} about to send END message", flush=True)
+        # Check if this client has received all END messages
+        if client_end_messages[client_id] >= NUMBER_OF_YEAR_WORKERS:
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} client {client_id} received all END messages from filter_by_year workers. Sending END messages...", flush=True)
+            completed_clients.add(client_id)
+            
+            # Print summary stats for this client
+            stats = client_stats[client_id]
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} SUMMARY for client {client_id}: messages_received={stats['messages_received']}, rows_received={stats['rows_received']}, rows_sent_to_amount={stats['rows_sent_to_amount']}, rows_sent_to_q3={stats['rows_sent_to_q3']}")
+            
             try:
-                # Send END to filter_by_amount (to all workers)
+                # Send END to filter_by_amount (to all workers) for this specific client
                 end_message, _ = build_message(client_id, type_of_message, 1, [])
                 for i in range(NUMBER_OF_AMOUNT_WORKERS):
                     routing_key = f"transaction.{i}"
                     filter_by_amount_exchange.send(end_message, routing_key=routing_key)
-                    print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message to filter_by_amount worker {i} via topic exchange", flush=True)
+                    print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message for client {client_id} to filter_by_amount worker {i} via topic exchange", flush=True)
                 
-                # Send END to categorizer_q3 via fanout exchange (reaches all workers)
+                # Send END to categorizer_q3 via fanout exchange for this specific client
                 end_message, _ = build_message(client_id, type_of_message, 1, [])
                 categorizer_q3_fanout_exchange.send(end_message)
-                print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message to categorizer_q3 via fanout exchange", flush=True)
+                print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message for client {client_id} to categorizer_q3 via fanout exchange", flush=True)
             except Exception as e:
-                print(f"[filter_by_hour] Worker {WORKER_INDEX} ERROR sending END message: {e}", flush=True)
+                print(f"[filter_by_hour] Worker {WORKER_INDEX} ERROR sending END message for client {client_id}: {e}", flush=True)
                 import traceback
                 traceback.print_exc()
-            
-            should_stop.set()
 
 
 def make_on_message_callback(filter_by_amount_exchange, categorizer_q3_topic_exchange, categorizer_q3_fanout_exchange, should_stop):

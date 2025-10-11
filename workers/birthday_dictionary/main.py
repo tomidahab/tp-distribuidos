@@ -31,32 +31,50 @@ def _sigterm_handler(signum, _):
 def listen_for_top_users():
     messages = []
     user_ids = set()
-    global receiver_queue
     receiver_queue = MessageMiddlewareQueue(RABBITMQ_HOST, RECEIVER_QUEUE)
     print(f"[birthday_dictionary] Listening for top users on queue: {RECEIVER_QUEUE}")
 
-    # Get the number of categorizer_q4 workers from env
-    end_messages_received = 0
+    # Track END messages per client: {client_id: count}
+    client_end_messages = defaultdict(int)
+    completed_clients = set()
 
     def on_message_callback(message: bytes):
-        nonlocal end_messages_received
+        nonlocal completed_clients
         parsed_message = parse_message(message)
+        client_id = parsed_message['client_id']
+        
+        # Skip if client already completed
+        if client_id in completed_clients:
+            return
+            
         top_users = []
-        print(f"[birthday_dictionary] Received message with {len(parsed_message['rows'])} rows, is_last={parsed_message['is_last']}")
+        print(f"[birthday_dictionary] Received message for client {client_id} with {len(parsed_message['rows'])} rows, is_last={parsed_message['is_last']}")
         for row in parsed_message['rows']:
             parts = row.split(',')
             if len(parts) == 3:
                 store_id, user_id, count = parts
                 top_users.append({'store_id': store_id, 'user_id': user_id, 'count': int(count)})
                 user_ids.add(user_id)
-        messages.append({'top_users': top_users, 'is_last': parsed_message['is_last']})
-        print(f"[birthday_dictionary] message processed, total messages: {len(messages)}, unique user_ids: {len(user_ids)}")
+        messages.append({'client_id': client_id, 'top_users': top_users, 'is_last': parsed_message['is_last']})
+        print(f"[birthday_dictionary] Message for client {client_id} processed, total messages: {len(messages)}, unique user_ids: {len(user_ids)}")
+        
         if parsed_message['is_last']:
-            end_messages_received += 1
-            print(f"[birthday_dictionary] Received end message {end_messages_received}/{CATEGORIZER_Q4_WORKERS} from categorizer_q4 workers.")
-            if end_messages_received >= CATEGORIZER_Q4_WORKERS:
-                print("[birthday_dictionary] All end messages received, stopping top user collection.")
-                receiver_queue.stop_consuming()
+            client_end_messages[client_id] += 1
+            print(f"[birthday_dictionary] Received end message {client_end_messages[client_id]}/{CATEGORIZER_Q4_WORKERS} for client {client_id}")
+            if client_end_messages[client_id] >= CATEGORIZER_Q4_WORKERS:
+                print(f"[birthday_dictionary] Client {client_id} completed, will send data request for this client")
+                completed_clients.add(client_id)
+                
+                # Send client-specific data request
+                request_message, _ = build_message(client_id, 0, 1, [])  # Request data for this client
+                request_queue = MessageMiddlewareQueue(RABBITMQ_HOST, GATEWAY_REQUEST_QUEUE)
+                request_queue.send(request_message)
+                request_queue.close()
+                
+                # Check if all clients completed
+                if not any(count < CATEGORIZER_Q4_WORKERS for count in client_end_messages.values() if count > 0):
+                    print("[birthday_dictionary] All clients completed, stopping")
+                    receiver_queue.stop_consuming()
 
     try:
         receiver_queue.start_consuming(on_message_callback)

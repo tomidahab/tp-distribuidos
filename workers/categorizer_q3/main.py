@@ -49,15 +49,18 @@ def get_semester(month):
     return 1 if 1 <= month <= 6 else 2
 
 def listen_for_transactions():
-    # Agregación: {(year, semester, store_id): total_payment}
-    semester_store_stats = defaultdict(float)
-    end_messages_received = 0
+    # Agregación por cliente: {client_id: {(year, semester, store_id): total_payment}}
+    client_semester_store_stats = defaultdict(lambda: defaultdict(float))
+    # Track END messages per client: {client_id: count}
+    client_end_messages = defaultdict(int)
+    processed_rows = 0
+    completed_clients = set()
     
     # Get routing keys for this worker
     worker_routing_keys = SEMESTER_MAPPING.get(WORKER_INDEX, [])
     if not worker_routing_keys:
         print(f"[categorizer_q3] No routing keys for worker {WORKER_INDEX}", file=sys.stderr)
-        return semester_store_stats
+        return client_semester_store_stats
     
     print(f"[categorizer_q3] Worker {WORKER_INDEX} will handle routing keys: {worker_routing_keys}", flush=True)
     print(f"[categorizer_q3] About to create MessageMiddlewareExchange with exchange: {RECEIVER_EXCHANGE}", flush=True)
@@ -86,45 +89,70 @@ def listen_for_transactions():
 
     except Exception as e:
         print(f"[categorizer_q3] Failed to connect to RabbitMQ: {e}", file=sys.stderr)
-        return semester_store_stats
+        return client_semester_store_stats
     
     print(f"[categorizer_q3] Worker {WORKER_INDEX} listening for transactions on exchange: {RECEIVER_EXCHANGE} with routing keys: {worker_routing_keys}")
 
     def on_message_callback(message: bytes):
-        nonlocal end_messages_received  # Allow modification of the outer variable
-        # print(f"[categorizer_q3] Worker {WORKER_INDEX} received a message!", flush=True)
+        nonlocal processed_rows, completed_clients
         try:
             parsed_message = parse_message(message)
             type_of_message = parsed_message['csv_type']  
             client_id = parsed_message['client_id']
             is_last = parsed_message['is_last']
             
-            # print(f"[categorizer_q3] Message details - is_last: {is_last}, rows: {len(parsed_message['rows'])}", flush=True)
+            # Skip if client already completed - check BEFORE any processing
+            if client_id in completed_clients:
+                print(f"[categorizer_q3] Worker {WORKER_INDEX} ignoring message from already completed client {client_id}")
+                return
+            
+            print(f"[categorizer_q3] Worker {WORKER_INDEX} processing message for client {client_id}, is_last: {is_last}, rows: {len(parsed_message['rows'])}", flush=True)
 
+            # Process regular rows
             for row in parsed_message['rows']:
-                # print(f"[categorizer_q3] Processing row: {row}, is_last={is_last}", flush=True)
-                dic_fields_row = row_to_dict(row, type_of_message)
+                try:
+                    dic_fields_row = row_to_dict(row, type_of_message)
+                    
+                    # Extract transaction data
+                    created_at = dic_fields_row['created_at']
+                    datetime_obj = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S")
+                    year = datetime_obj.year
+                    month = datetime_obj.month
+                    semester = get_semester(month)
+                    store_id = str(dic_fields_row['store_id'])
+                    payment_value = float(dic_fields_row.get('final_amount', 0.0))
+                    
+                    if payment_value > 0:
+                        key = (year, semester, store_id)
+                        client_semester_store_stats[client_id][key] += payment_value
+                        processed_rows += 1
+                        
+                        # Log progress for large datasets
+                        if processed_rows % 10000 == 0:
+                            print(f"[categorizer_q3] Worker {WORKER_INDEX} processed {processed_rows} rows so far", flush=True)
+                    elif payment_value == 0.0:
+                        print(f"[categorizer_q3] Warning: Payment value is 0.0 for row: {row}", file=sys.stderr)
+                        
+                except Exception as row_error:
+                    print(f"[categorizer_q3] Error processing row: {row_error}", file=sys.stderr)
+                    continue
                 
-                # Extract transaction data
-                created_at = dic_fields_row['created_at']
-                datetime_obj = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S")
-                year = datetime_obj.year
-                month = datetime_obj.month
-                semester = get_semester(month)
-                store_id = str(dic_fields_row['store_id'])
-                payment_value = float(dic_fields_row.get('final_amount', 0.0))
-                if payment_value == 0.0:
-                    print(f"[categorizer_q3] Warning: Payment value is 0.0 for row: {row}", file=sys.stderr)
-                
-                key = (year, semester, store_id)
-                semester_store_stats[key] += payment_value
-                
+            # Handle END messages per client
             if is_last:
-                end_messages_received += 1
-                print(f"[categorizer_q3] Worker {WORKER_INDEX} received END message {end_messages_received}/{NUMBER_OF_HOUR_WORKERS}")
-                if end_messages_received >= NUMBER_OF_HOUR_WORKERS:
-                    print(f"[categorizer_q3] Worker {WORKER_INDEX} received all END messages, stopping transaction collection.")
-                    topic_middleware.stop_consuming()
+                client_end_messages[client_id] += 1
+                print(f"[categorizer_q3] Worker {WORKER_INDEX} received END message {client_end_messages[client_id]}/{NUMBER_OF_HOUR_WORKERS} for client {client_id}", flush=True)
+                
+                # Check if this client has received all END messages
+                if client_end_messages[client_id] >= NUMBER_OF_HOUR_WORKERS:
+                    print(f"[categorizer_q3] Worker {WORKER_INDEX} completed all data for client {client_id}, sending results", flush=True)
+                    completed_clients.add(client_id)
+                    
+                    # Send results for this client
+                    send_client_results(client_id, client_semester_store_stats[client_id])
+                    
+                    # Don't delete client data yet - keep it for potential debugging
+                    # but mark as completed
+                    print(f"[categorizer_q3] Client {client_id} processing completed")
         except Exception as e:
             print(f"[categorizer_q3] Error processing transaction message: {e}", file=sys.stderr)
 
@@ -141,7 +169,29 @@ def listen_for_transactions():
     finally:
         topic_middleware.close()
         # fanout_middleware.close()
-    return semester_store_stats
+    return client_semester_store_stats
+
+def send_client_results(client_id, semester_store_stats):
+    """Send results for specific client to gateway"""
+    try:
+        global gateway_result_queue
+        if gateway_result_queue is None:
+            gateway_result_queue = MessageMiddlewareQueue(RABBITMQ_HOST, GATEWAY_QUEUE)
+        
+        # Convert to CSV format like Q1
+        csv_lines = []
+        for (year, semester, store_id), total_payment in semester_store_stats.items():
+            csv_line = f"{year},{semester},{store_id},{total_payment}"
+            csv_lines.append(csv_line)
+            
+        # Send as Q3-style message with client_id
+        message, _ = build_message(client_id, 3, 1, csv_lines)  # csv_type=3 for Q3, is_last=1 (final message)
+        gateway_result_queue.send(message)
+        print(f"[categorizer_q3] Worker {WORKER_INDEX} sent {len(csv_lines)} results for client {client_id} to gateway")
+            
+    except Exception as e:
+        print(f"[categorizer_q3] ERROR sending results for client {client_id}: {e}", file=sys.stderr)
+        # Don't raise to avoid stopping other clients
 
 def send_results_to_gateway(semester_store_stats):
     try:
@@ -174,18 +224,8 @@ def main():
         print("[categorizer_q3] Starting worker...", flush=True)
         print("[categorizer_q3] About to call listen_for_transactions()...", flush=True)
         
-        semester_store_stats = listen_for_transactions()
-        print("[categorizer_q3] listen_for_transactions() completed", flush=True)
-        print("[categorizer_q3] Final semester-store stats:")
-        for key, total in semester_store_stats.items():
-            year, semester, store_id = key
-            print(f"Year: {year}, Semester: {semester}, Store: {store_id}, Total Payment: {total}")
-            
-        # if not semester_store_stats:
-        #     print("[categorizer_q3] No transaction data received, exiting.")
-        #     return
-        # Even if empty, we send results to notify worker completion!
-        send_results_to_gateway(semester_store_stats)
+        client_semester_store_stats = listen_for_transactions()
+        print("[categorizer_q3] listen_for_transactions() completed - all clients processed", flush=True)
         print("[categorizer_q3] Worker completed successfully.", flush=True)
         
     except Exception as e:
