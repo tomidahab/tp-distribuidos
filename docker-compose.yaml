@@ -7,7 +7,7 @@ services:
       dockerfile: gateway/Dockerfile
     container_name: gateway
     environment:
-      - QUERY_1_TOTAL_WORKERS=3
+      - QUERY_1_TOTAL_WORKERS=2
       - QUERY_3_TOTAL_WORKERS=2
       - NUMBER_OF_YEAR_WORKERS=3
     ports:
@@ -28,7 +28,8 @@ services:
       - FANOUT_EXCHANGE=categorizer_q3_fanout_exchange
       - WORKER_INDEX=0
       - GATEWAY_QUEUE=query3_result_receiver_queue
-      - NUMBER_OF_HOUR_WORKERS=3
+      - NUMBER_OF_HOUR_WORKERS=4
+      - ASSIGNED_SEMESTERS=semester.2024-1,semester.2024-2
     depends_on:
       - rabbitmq_server
     volumes:
@@ -45,7 +46,8 @@ services:
       - FANOUT_EXCHANGE=categorizer_q3_fanout_exchange
       - WORKER_INDEX=1
       - GATEWAY_QUEUE=query3_result_receiver_queue
-      - NUMBER_OF_HOUR_WORKERS=3
+      - NUMBER_OF_HOUR_WORKERS=4
+      - ASSIGNED_SEMESTERS=semester.2023-2,semester.2025-1
     depends_on:
       - rabbitmq_server
     volumes:
@@ -98,7 +100,7 @@ services:
       - RECEIVER_EXCHANGE_T_ITEMS=filter_by_year_transaction_items_exchange
       - WORKER_INDEX=0
       - HOUR_FILTER_EXCHANGE=filter_by_hour_exchange
-      - NUMBER_OF_HOUR_WORKERS=3
+      - NUMBER_OF_HOUR_WORKERS=4
       - NUMBER_OF_YEAR_WORKERS=3
       - ITEM_CATEGORIZER_QUEUE=categorizer_q2_receiver_queue
       - STORE_USER_CATEGORIZER_QUEUE=store_user_categorizer_queue
@@ -122,7 +124,7 @@ services:
       - RECEIVER_EXCHANGE_T_ITEMS=filter_by_year_transaction_items_exchange
       - WORKER_INDEX=1
       - HOUR_FILTER_EXCHANGE=filter_by_hour_exchange
-      - NUMBER_OF_HOUR_WORKERS=3
+      - NUMBER_OF_HOUR_WORKERS=4
       - NUMBER_OF_YEAR_WORKERS=3
       - ITEM_CATEGORIZER_QUEUE=categorizer_q2_receiver_queue
       - STORE_USER_CATEGORIZER_QUEUE=store_user_categorizer_queue
@@ -146,7 +148,7 @@ services:
       - RECEIVER_EXCHANGE_T_ITEMS=filter_by_year_transaction_items_exchange
       - WORKER_INDEX=2
       - HOUR_FILTER_EXCHANGE=filter_by_hour_exchange
-      - NUMBER_OF_HOUR_WORKERS=3
+      - NUMBER_OF_HOUR_WORKERS=4
       - NUMBER_OF_YEAR_WORKERS=3
       - ITEM_CATEGORIZER_QUEUE=categorizer_q2_receiver_queue
       - STORE_USER_CATEGORIZER_QUEUE=store_user_categorizer_queue
@@ -173,8 +175,8 @@ services:
       - FILTER_BY_AMOUNT_EXCHANGE=filter_by_amount_exchange
       - CATEGORIZER_Q3_EXCHANGE=categorizer_q3_exchange
       - CATEGORIZER_Q3_FANOUT_EXCHANGE=categorizer_q3_fanout_exchange
-      - NUMBER_OF_AMOUNT_WORKERS=3
-      - NUMBER_OF_HOUR_WORKERS=3
+      - NUMBER_OF_AMOUNT_WORKERS=2
+      - NUMBER_OF_HOUR_WORKERS=4
       - NUMBER_OF_YEAR_WORKERS=3
     depends_on:
       - rabbitmq_server
@@ -193,8 +195,8 @@ services:
       - FILTER_BY_AMOUNT_EXCHANGE=filter_by_amount_exchange
       - CATEGORIZER_Q3_EXCHANGE=categorizer_q3_exchange
       - CATEGORIZER_Q3_FANOUT_EXCHANGE=categorizer_q3_fanout_exchange
-      - NUMBER_OF_AMOUNT_WORKERS=3
-      - NUMBER_OF_HOUR_WORKERS=3
+      - NUMBER_OF_AMOUNT_WORKERS=2
+      - NUMBER_OF_HOUR_WORKERS=4
       - NUMBER_OF_YEAR_WORKERS=3
     depends_on:
       - rabbitmq_server
@@ -213,8 +215,28 @@ services:
       - FILTER_BY_AMOUNT_EXCHANGE=filter_by_amount_exchange
       - CATEGORIZER_Q3_EXCHANGE=categorizer_q3_exchange
       - CATEGORIZER_Q3_FANOUT_EXCHANGE=categorizer_q3_fanout_exchange
-      - NUMBER_OF_AMOUNT_WORKERS=3
-      - NUMBER_OF_HOUR_WORKERS=3
+      - NUMBER_OF_AMOUNT_WORKERS=2
+      - NUMBER_OF_HOUR_WORKERS=4
+      - NUMBER_OF_YEAR_WORKERS=3
+    depends_on:
+      - rabbitmq_server
+
+  filter_by_hour_worker_4:
+    build:
+      context: .
+      dockerfile: workers/filter_by_hour/Dockerfile
+    container_name: filter_by_hour_worker_4
+    environment:
+      - RABBITMQ_HOST=rabbitmq_server
+      - RECEIVER_EXCHANGE=filter_by_hour_exchange
+      - WORKER_INDEX=3
+      - START_HOUR=6
+      - END_HOUR=22
+      - FILTER_BY_AMOUNT_EXCHANGE=filter_by_amount_exchange
+      - CATEGORIZER_Q3_EXCHANGE=categorizer_q3_exchange
+      - CATEGORIZER_Q3_FANOUT_EXCHANGE=categorizer_q3_fanout_exchange
+      - NUMBER_OF_AMOUNT_WORKERS=2
+      - NUMBER_OF_HOUR_WORKERS=4
       - NUMBER_OF_YEAR_WORKERS=3
     depends_on:
       - rabbitmq_server
@@ -230,7 +252,7 @@ services:
       - WORKER_INDEX=0
       - MIN_AMOUNT=75.0
       - RESULT_QUEUE=query1_result_receiver_queue
-      - NUMBER_OF_HOUR_WORKERS=3
+      - NUMBER_OF_HOUR_WORKERS=4
     depends_on:
       - rabbitmq_server
 
@@ -245,22 +267,7 @@ services:
       - WORKER_INDEX=1
       - MIN_AMOUNT=75.0
       - RESULT_QUEUE=query1_result_receiver_queue
-      - NUMBER_OF_HOUR_WORKERS=3
-    depends_on:
-      - rabbitmq_server
-
-  filter_by_amount_worker_3:
-    build:
-      context: .
-      dockerfile: workers/filter_by_amount/Dockerfile
-    container_name: filter_by_amount_worker_3
-    environment:
-      - RABBITMQ_HOST=rabbitmq_server
-      - RECEIVER_EXCHANGE=filter_by_amount_exchange
-      - WORKER_INDEX=2
-      - MIN_AMOUNT=75.0
-      - RESULT_QUEUE=query1_result_receiver_queue
-      - NUMBER_OF_HOUR_WORKERS=3
+      - NUMBER_OF_HOUR_WORKERS=4
     depends_on:
       - rabbitmq_server
 
