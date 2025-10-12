@@ -48,7 +48,7 @@ def listen_for_top_users():
             return
             
         top_users = []
-        print(f"[birthday_dictionary] Received message for client {client_id} with {len(parsed_message['rows'])} rows, is_last={parsed_message['is_last']}")
+        #print(f"[birthday_dictionary] Received message for client {client_id} with {len(parsed_message['rows'])} rows, is_last={parsed_message['is_last']}")
         for row in parsed_message['rows']:
             parts = row.split(',')
             if len(parts) == 3:
@@ -56,7 +56,7 @@ def listen_for_top_users():
                 top_users.append({'store_id': store_id, 'user_id': user_id, 'count': int(count)})
                 user_ids.add(user_id)
         messages.append({'client_id': client_id, 'top_users': top_users, 'is_last': parsed_message['is_last']})
-        print(f"[birthday_dictionary] Message for client {client_id} processed, total messages: {len(messages)}, unique user_ids: {len(user_ids)}")
+        #print(f"[birthday_dictionary] Message for client {client_id} processed, total messages: {len(messages)}, unique user_ids: {len(user_ids)}")
         
         if parsed_message['is_last']:
             client_end_messages[client_id] += 1

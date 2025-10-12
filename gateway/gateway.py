@@ -80,7 +80,7 @@ class Gateway:
                 client_id = parsed_msg.get('client_id', 'unknown')
                 rows = parsed_msg.get('rows', [])
                 
-                logging.info(f"[{result_queue}] Mensaje recibido para client {client_id}")
+                #logging.info(f"[{result_queue}] Mensaje recibido para client {client_id}")
                 
                 # Convert rows to result string
                 dictionary_str = '\n'.join(rows) if rows else ''
@@ -168,13 +168,46 @@ class Gateway:
     def handle_client_protocol(self, client_socket, client_id):
         """Handle protocol communication with specific client"""
         try:
-            self.receive_datasets(client_socket, client_id)
+            # Create RabbitMQ connections for this client session
+            from common.middleware import MessageMiddlewareQueue, MessageMiddlewareExchange
+            
+            RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq_server')
+            
+            # Create the exchanges and queues for this client
+            transactions_exchange = MessageMiddlewareExchange(
+                RABBITMQ_HOST, 
+                'filter_by_year_transactions_exchange', 
+                'topic',
+                ""
+            )
+            
+            transaction_items_exchange = MessageMiddlewareExchange(
+                RABBITMQ_HOST, 
+                'filter_by_year_transaction_items_exchange', 
+                'topic',
+                ""
+            )
+            
+            categorizer_items_exchange = MessageMiddlewareExchange(
+                RABBITMQ_HOST,
+                'categorizer_q2_items_fanout_exchange',
+                "fanout",
+                ""
+            )
+            
+            birth_dic_queue = MessageMiddlewareQueue(
+                RABBITMQ_HOST, 
+                os.environ.get('Q4_DATA_RESPONSES_QUEUE', 'gateway_client_data_queue')
+            )
+            
+            self.receive_datasets(client_socket, client_id, transactions_exchange, transaction_items_exchange, 
+                                categorizer_items_exchange, birth_dic_queue)
             logging.info(f"[CLIENT {client_id}] Datasets received and processed")
             
             # Send END messages to all workers for this client
             logging.info(f"[CLIENT {client_id}] Sending END messages to all workers...")
             from gateway_protocol import send_end_messages_to_all_workers
-            send_end_messages_to_all_workers(client_id)
+            send_end_messages_to_all_workers(client_id, transactions_exchange, transaction_items_exchange)
             logging.info(f"[CLIENT {client_id}] END messages sent to all workers")
             
             # Wait for all queries to complete
@@ -261,7 +294,7 @@ class Gateway:
                 parsed_msg = parse_message(message)
                 client_id = parsed_msg.get('client_id', 'unknown')
                 
-                logging.info(f"[{Q4_DATA_REQUESTS_QUEUE}] Q4 request for client {client_id}")
+                #logging.info(f"[{Q4_DATA_REQUESTS_QUEUE}] Q4 request for client {client_id}")
                 
                 # Send Q4 step request to specific client
                 with self.clients_lock:
@@ -269,7 +302,7 @@ class Gateway:
                         client_socket = self.clients[client_id]['socket']
                         send_response(client_socket, response_types.Q4_STEP, "")
                         self.receive_datasets(client_socket, client_id)
-                        logging.info(f"[{Q4_DATA_REQUESTS_QUEUE}] Q4 data received from client {client_id}")
+                        #logging.info(f"[{Q4_DATA_REQUESTS_QUEUE}] Q4 data received from client {client_id}")
                     else:
                         logging.warning(f"[{Q4_DATA_REQUESTS_QUEUE}] Client {client_id} not found for Q4 request")
                         
@@ -300,7 +333,7 @@ class Gateway:
             parsed_message = parse_message(message)
             rows = parsed_message['rows']
             client_id = parsed_message.get('client_id')
-            logging.info(f"[{result_queue}] Parsed message: client_id={client_id}, csv_type={parsed_message.get('csv_type')}, is_last={parsed_message.get('is_last')}, rows={len(rows)}")
+            #logging.info(f"[{result_queue}] Parsed message: client_id={client_id}, csv_type={parsed_message.get('csv_type')}, is_last={parsed_message.get('is_last')}, rows={len(rows)}")
 
             # Increment counter for specific query
             if result_queue == RESULT_Q1_QUEUE:
@@ -310,23 +343,24 @@ class Gateway:
             
             if result_queue == RESULT_Q2_QUEUE:
                 q2_messages_received += 1
-                logging.info(f"[{result_queue}] Received Q2 message {q2_messages_received} with {len(rows)} rows, is_last={parsed_message['is_last']}")
+                #logging.info(f"[{result_queue}] Received Q2 message {q2_messages_received} with {len(rows)} rows, is_last={parsed_message['is_last']}")
             
             if result_queue == RESULT_Q3_QUEUE:
                 q3_messages_received += 1
-                logging.info(f"[{result_queue}] Received Q3 message {q3_messages_received} with {len(rows)} rows, is_last={parsed_message['is_last']}")
+                #logging.info(f"[{result_queue}] Received Q3 message {q3_messages_received} with {len(rows)} rows, is_last={parsed_message['is_last']}")
 
             if result_queue == RESULT_Q4_QUEUE:
-                logging.info(f"[{result_queue}] Received Q4 message {q4_messages_received} with {len(rows)} rows, is_last={parsed_message['is_last']}")
+                #logging.info(f"[{result_queue}] Received Q4 message {q4_messages_received} with {len(rows)} rows, is_last={parsed_message['is_last']}")
+                pass
 
             # Use client_id to create separate result files per client
             if client_id:
                 client_result_file = result_file.replace('.csv', f'_{client_id}.csv')
                 self.save_temp_results(client_result_file, rows)
-                logging.info(f"[{result_queue}] Message saved to {client_result_file} for client {client_id}")
+                #logging.info(f"[{result_queue}] Message saved to {client_result_file} for client {client_id}")
             else:
                 self.save_temp_results(result_file, rows)
-                logging.warning(f"[{result_queue}] No client_id found, saving to default file {result_file}")
+                #logging.warning(f"[{result_queue}] No client_id found, saving to default file {result_file}")
             # logging.info(f"[{result_queue}] Mensaje guardado en {result_file}")
 
             # Check completion using specific counter for each query
@@ -355,7 +389,8 @@ class Gateway:
         except Exception as e:
             logging.error(f"[{result_queue}] Error consumiendo mensajes: {e}")
 
-    def receive_datasets(self, client_socket, client_id):
+    def receive_datasets(self, client_socket, client_id, transactions_exchange, transaction_items_exchange, 
+                        categorizer_items_exchange, birth_dic_queue):
         total_files_received = 0
         total_bytes_received = 0
         
@@ -393,7 +428,10 @@ class Gateway:
                             logging.info(f"[CLIENT {client_id}] Processing chunk {chunks_processed} for {filename}, received: {received}/{filesize} bytes")
                     
                     if len(chunk) != 0:
-                        handle_and_forward_chunk(client_id, file_code, 1 if received >= filesize and last_file else 0, chunk)
+                        from gateway_protocol import handle_and_forward_chunk
+                        handle_and_forward_chunk(client_id, file_code, 1 if received >= filesize and last_file else 0, chunk,
+                                               transactions_exchange, transaction_items_exchange, 
+                                               categorizer_items_exchange, birth_dic_queue)
 
             total_files_received += 1
             total_bytes_received += filesize
@@ -404,40 +442,40 @@ class Gateway:
                 logging.info(f"[CLIENT {client_id}] All datasets received - total files: {total_files_received}, total bytes: {total_bytes_received}")
                 break
 
-    def handle_client(self, addr):
-        logging.info(f"Conexión recibida de {addr}")
-        self.clear_temp_files()
-        try:
-            self.receive_datasets()
-            logging.info("Todos los archivos fueron recibidos correctamente.")
+    # def handle_client(self, addr):
+    #     logging.info(f"Conexión recibida de {addr}")
+    #     self.clear_temp_files()
+    #     try:
+    #         self.receive_datasets()
+    #         logging.info("Todos los archivos fueron recibidos correctamente.")
             
-            # Send END messages to all filter_by_year workers
-            logging.info("Sending END messages to filter_by_year workers...")
-            send_end_messages_to_filter_by_year()
-            logging.info("END messages sent to filter_by_year workers.")
+    #         # Send END messages to all filter_by_year workers
+    #         logging.info("Sending END messages to filter_by_year workers...")
+    #         send_end_messages_to_filter_by_year()
+    #         logging.info("END messages sent to filter_by_year workers.")
             
-            # All files sent, now wait for queries to finish
-            with self.cond:
-                while self.queries_done < QUERIES_TO_COMPLETE and not self.stop_by_sigterm:
-                    self.cond.wait()
-                # Reset for next client
-                self.queries_done = 0
+    #         # All files sent, now wait for queries to finish
+    #         with self.cond:
+    #             while self.queries_done < QUERIES_TO_COMPLETE and not self.stop_by_sigterm:
+    #                 self.cond.wait()
+    #             # Reset for next client
+    #             self.queries_done = 0
     
-            # All queries done, now send results from files
-            if self.stop_by_sigterm:
-                return
+    #         # All queries done, now send results from files
+    #         if self.stop_by_sigterm:
+    #             return
             
-            logging.info(f"Queries completadas, enviando resultados al cliente...")
+    #         logging.info(f"Queries completadas, enviando resultados al cliente...")
 
-            self.send_file_result(RESULT_Q1_FILE)
-            self.send_file_result(RESULT_Q2_FILE)
-            self.send_file_result(RESULT_Q3_FILE)
-            self.send_file_result(RESULT_Q4_FILE)
+    #         self.send_file_result(RESULT_Q1_FILE)
+    #         self.send_file_result(RESULT_Q2_FILE)
+    #         self.send_file_result(RESULT_Q3_FILE)
+    #         self.send_file_result(RESULT_Q4_FILE)
 
-            logging.info(f"Respuesta enviada, persistencia eliminada.")
+    #         logging.info(f"Respuesta enviada, persistencia eliminada.")
     
-        except Exception as e:
-            logging.error(f"Error manejando cliente {addr}: {e}")
+    #     except Exception as e:
+    #         logging.error(f"Error manejando cliente {addr}: {e}")
             
     def send_file_result(self, file):
         with open(file, 'r') as f:
