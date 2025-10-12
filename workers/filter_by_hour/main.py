@@ -95,14 +95,21 @@ def on_message_callback(message: bytes, filter_by_amount_exchange, categorizer_q
     client_id = parsed_message['client_id']
     is_last = int(parsed_message['is_last'])
     
-    # Skip if client already completed - check BEFORE updating any stats
-    if client_id in completed_clients:
-        print(f"[filter_by_hour] Worker {WORKER_INDEX} SKIPPING message from completed client {client_id} with {len(parsed_message['rows'])} rows, is_last={is_last}")
-        return
-    
     # Update client stats
     client_stats[client_id]['messages_received'] += 1
     client_stats[client_id]['rows_received'] += len(parsed_message['rows'])
+    
+    # Handle END message FIRST
+    if is_last == 1:
+        client_stats[client_id]['end_messages_received'] += 1
+        client_end_messages[client_id] += 1
+        end_messages_received += 1  # Keep global counter for logging
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} received END message {client_end_messages[client_id]}/{NUMBER_OF_YEAR_WORKERS} for client {client_id} (total END messages: {end_messages_received})", flush=True)
+    
+    # Skip if client already completed - check AFTER processing END message
+    if client_id in completed_clients:
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} SKIPPING message from completed client {client_id} with {len(parsed_message['rows'])} rows, is_last={is_last}")
+        return
     
     #print(f"[filter_by_hour] Worker {WORKER_INDEX} received message from client {client_id} with {len(parsed_message['rows'])} rows, is_last={is_last} (total msgs: {client_stats[client_id]['messages_received']}, total rows: {client_stats[client_id]['rows_received']})")
     
@@ -172,15 +179,9 @@ def on_message_callback(message: bytes, filter_by_amount_exchange, categorizer_q
         #else:
             #print(f"[filter_by_hour] Worker {WORKER_INDEX} unknown csv_type: {type_of_message}", file=sys.stderr)
 
-    # Handle END message when last message is received
-    if is_last == 1:
-        client_stats[client_id]['end_messages_received'] += 1
-        client_end_messages[client_id] += 1
-        end_messages_received += 1  # Keep global counter for logging
-        print(f"[filter_by_hour] Worker {WORKER_INDEX} received END message {client_end_messages[client_id]}/{NUMBER_OF_YEAR_WORKERS} for client {client_id} (total END messages: {end_messages_received})", flush=True)
-        
-        # Check if this client has received all END messages
-        if client_end_messages[client_id] >= NUMBER_OF_YEAR_WORKERS:
+    # Check if this client has received all END messages and complete processing
+    if is_last == 1 and client_end_messages[client_id] >= NUMBER_OF_YEAR_WORKERS:
+        if client_id not in completed_clients:
             print(f"[filter_by_hour] Worker {WORKER_INDEX} client {client_id} received all END messages from filter_by_year workers. Sending END messages...", flush=True)
             completed_clients.add(client_id)
             

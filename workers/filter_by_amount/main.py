@@ -83,6 +83,13 @@ def on_message_callback(message: bytes, topic_middleware, should_stop):
         client_stats[client_id]['end_messages_received'] += 1
         client_end_messages[client_id] += 1
         print(f"[filter_by_amount] Worker {WORKER_INDEX} received END message {client_end_messages[client_id]}/{NUMBER_OF_HOUR_WORKERS} for client {client_id}", flush=True)
+        
+        # Check if this client has completed (received all END messages) and mark immediately
+        if client_end_messages[client_id] >= NUMBER_OF_HOUR_WORKERS:
+            if client_id not in completed_clients:
+                completed_clients.add(client_id)
+                stats = client_stats[client_id]
+                print(f"[filter_by_amount] Worker {WORKER_INDEX} SUMMARY for client {client_id}: messages_received={stats['messages_received']}, rows_received={stats['rows_received']}, rows_sent={stats['rows_sent']}, end_messages_received={stats['end_messages_received']}")
     
     # Skip if client already completed - check AFTER processing END message
     if client_id in completed_clients:
@@ -95,6 +102,10 @@ def on_message_callback(message: bytes, topic_middleware, should_stop):
     
     # Check if this client has completed (received all END messages)
     client_completed = client_end_messages[client_id] >= NUMBER_OF_HOUR_WORKERS
+    
+    # Debug logging for client_1
+    if client_id == "client_1" and is_last:
+        print(f"[filter_by_amount] Worker {WORKER_INDEX} DEBUG client_1: is_last={is_last}, client_completed={client_completed}, end_messages={client_end_messages[client_id]}")
     
     if filtered_rows or (is_last and client_completed):
         client_stats[client_id]['rows_sent'] += len(filtered_rows)
@@ -113,12 +124,6 @@ def on_message_callback(message: bytes, topic_middleware, should_stop):
         # Count outgoing rows
         rows_sent += len(filtered_rows)
         #print(f"[filter_by_amount] Worker {WORKER_INDEX} sent {len(filtered_rows)} filtered rows for client {client_id}, final_is_last={final_is_last} (total sent: {client_stats[client_id]['rows_sent']})", flush=True)
-        
-        # Print summary when client completes
-        if final_is_last == 1:
-            completed_clients.add(client_id)
-            stats = client_stats[client_id]
-            print(f"[filter_by_amount] Worker {WORKER_INDEX} SUMMARY for client {client_id}: messages_received={stats['messages_received']}, rows_received={stats['rows_received']}, rows_sent={stats['rows_sent']}, end_messages_received={stats['end_messages_received']}")
 
 
 def make_on_message_callback(topic_middleware, should_stop):

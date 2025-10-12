@@ -107,6 +107,19 @@ def listen_for_transactions():
             if is_last:
                 client_end_messages[client_id] += 1
                 print(f"[categorizer_q3] Worker {WORKER_INDEX} received END message {client_end_messages[client_id]}/{NUMBER_OF_HOUR_WORKERS} for client {client_id}", flush=True)
+                
+                # Mark client as completed immediately when all END messages received
+                if client_end_messages[client_id] >= NUMBER_OF_HOUR_WORKERS:
+                    if client_id not in completed_clients:
+                        print(f"[categorizer_q3] Worker {WORKER_INDEX} completed all data for client {client_id}, sending results", flush=True)
+                        completed_clients.add(client_id)
+                        
+                        # Send results for this client
+                        send_client_results(client_id, client_semester_store_stats[client_id])
+                        
+                        # Don't delete client data yet - keep it for potential debugging
+                        # but mark as completed
+                        print(f"[categorizer_q3] Client {client_id} processing completed")
             
             # Skip if client already completed - check AFTER processing END message
             if client_id in completed_clients:
@@ -141,18 +154,6 @@ def listen_for_transactions():
                 except Exception as row_error:
                     print(f"[categorizer_q3] Error processing row: {row_error}", file=sys.stderr)
                     continue
-                
-            # Check if this client has received all END messages and complete processing
-            if is_last and client_end_messages[client_id] >= NUMBER_OF_HOUR_WORKERS:
-                print(f"[categorizer_q3] Worker {WORKER_INDEX} completed all data for client {client_id}, sending results", flush=True)
-                completed_clients.add(client_id)
-                
-                # Send results for this client
-                send_client_results(client_id, client_semester_store_stats[client_id])
-                
-                # Don't delete client data yet - keep it for potential debugging
-                # but mark as completed
-                print(f"[categorizer_q3] Client {client_id} processing completed")
         except Exception as e:
             print(f"[categorizer_q3] Error processing transaction message: {e}", file=sys.stderr)
 

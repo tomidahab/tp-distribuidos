@@ -97,11 +97,13 @@ def listen_for_items():
     
     try:
         global items_exchange
+        # Each worker needs its own unique queue for fanout exchange
+        unique_items_queue = f"{ITEMS_QUEUE}_worker_{WORKER_INDEX}"
         items_exchange = MessageMiddlewareExchange(
             host=RABBITMQ_HOST,
             exchange_name=ITEMS_FANOUT_EXCHANGE,
             exchange_type="fanout",
-            queue_name=ITEMS_QUEUE
+            queue_name=unique_items_queue  # Unique queue per worker
         )
     except Exception as e:
         print(f"[categorizer_q2] Failed to connect to RabbitMQ fanout exchange for items: {e}", file=sys.stderr)
@@ -199,20 +201,22 @@ def listen_for_sales(items, topic_middleware):
                 client_end_messages[client_id] += 1
                 print(f"[categorizer_q2] Worker {WORKER_INDEX} received END message {client_end_messages[client_id]}/{NUMBER_OF_YEAR_WORKERS} for client {client_id}")
                 
+                # Mark client as completed immediately when all END messages received
                 if client_end_messages[client_id] >= NUMBER_OF_YEAR_WORKERS:
-                    print(f"[categorizer_q2] Worker {WORKER_INDEX} client {client_id} received all END messages, processing results")
-                    completed_clients.add(client_id)
-                    
-                    # Print summary stats for this client
-                    stats = client_stats[client_id]
-                    print(f"[categorizer_q2] Worker {WORKER_INDEX} SUMMARY for client {client_id}: transactions_messages_received={stats['transactions_messages_received']}, transactions_rows_received={stats['transactions_rows_received']}, transaction_items_messages_received={stats['transaction_items_messages_received']}, transaction_items_rows_received={stats['transaction_items_rows_received']}")
-                    
-                    # Process and send results for this client
-                    send_client_q2_results(client_id, client_sales_stats[client_id], items)
-                    
-                    # Don't delete client data yet - keep it for potential debugging
-                    # but mark as completed
-                    print(f"[categorizer_q2] Worker {WORKER_INDEX} client {client_id} processing completed")
+                    if client_id not in completed_clients:
+                        print(f"[categorizer_q2] Worker {WORKER_INDEX} client {client_id} received all END messages, processing results")
+                        completed_clients.add(client_id)
+                        
+                        # Print summary stats for this client
+                        stats = client_stats[client_id]
+                        print(f"[categorizer_q2] Worker {WORKER_INDEX} SUMMARY for client {client_id}: transactions_messages_received={stats['transactions_messages_received']}, transactions_rows_received={stats['transactions_rows_received']}, transaction_items_messages_received={stats['transaction_items_messages_received']}, transaction_items_rows_received={stats['transaction_items_rows_received']}")
+                        
+                        # Process and send results for this client
+                        send_client_q2_results(client_id, client_sales_stats[client_id], items)
+                        
+                        # Don't delete client data yet - keep it for potential debugging
+                        # but mark as completed
+                        print(f"[categorizer_q2] Worker {WORKER_INDEX} client {client_id} processing completed")
                     
                     # Simple stopping condition: if we've processed some clients and no new messages 
                     # are coming for a while, we can assume all clients are done
