@@ -9,7 +9,7 @@ from client.display import DisplayTable
 
 SERVER_HOST = "gateway"  # local test, cambiar a "gateway" en docker
 SERVER_PORT = 5000
-CHUNK_TARGET = 4096
+CHUNK_TARGET = 40960
 
 class Client:
     def __init__(self, client_id="client_1"):

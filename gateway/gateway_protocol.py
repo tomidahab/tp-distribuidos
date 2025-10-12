@@ -53,7 +53,7 @@ def handle_and_forward_chunk(client_id: str, csv_type: int, is_last: int, chunk:
     global transactions_worker_counter, transaction_items_worker_counter
 
     rows = chunk.decode("utf-8").splitlines()
-    message, _ = build_message(client_id, csv_type, is_last, rows)
+    message, _ = build_message(client_id, csv_type, 0, rows)
     MAX_RETRIES = 3
     RETRY_DELAY = 0.1  # Reduced from 3 seconds to 100ms
     
@@ -99,6 +99,7 @@ def handle_and_forward_chunk(client_id: str, csv_type: int, is_last: int, chunk:
                 
         elif csv_type == CSV_TYPES_REVERSE["menu_items"]:  # menu_items
             print(f"[gateway_protocol] Forwarding menu_items to categorizer_q2_items_fanout_exchange")
+            message, _ = build_message(client_id, csv_type, is_last, rows)
             for attempt in range(MAX_RETRIES):
                 try:
                     categorizer_items_exchange.send(message)

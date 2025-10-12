@@ -442,40 +442,40 @@ class Gateway:
                 logging.info(f"[CLIENT {client_id}] All datasets received - total files: {total_files_received}, total bytes: {total_bytes_received}")
                 break
 
-    def handle_client(self, addr):
-        logging.info(f"Conexión recibida de {addr}")
-        self.clear_temp_files()
-        try:
-            self.receive_datasets()
-            logging.info("Todos los archivos fueron recibidos correctamente.")
+    # def handle_client(self, addr):
+    #     logging.info(f"Conexión recibida de {addr}")
+    #     self.clear_temp_files()
+    #     try:
+    #         self.receive_datasets()
+    #         logging.info("Todos los archivos fueron recibidos correctamente.")
             
-            # Send END messages to all filter_by_year workers
-            logging.info("Sending END messages to filter_by_year workers...")
-            send_end_messages_to_filter_by_year()
-            logging.info("END messages sent to filter_by_year workers.")
+    #         # Send END messages to all filter_by_year workers
+    #         logging.info("Sending END messages to filter_by_year workers...")
+    #         send_end_messages_to_filter_by_year()
+    #         logging.info("END messages sent to filter_by_year workers.")
             
-            # All files sent, now wait for queries to finish
-            with self.cond:
-                while self.queries_done < QUERIES_TO_COMPLETE and not self.stop_by_sigterm:
-                    self.cond.wait()
-                # Reset for next client
-                self.queries_done = 0
+    #         # All files sent, now wait for queries to finish
+    #         with self.cond:
+    #             while self.queries_done < QUERIES_TO_COMPLETE and not self.stop_by_sigterm:
+    #                 self.cond.wait()
+    #             # Reset for next client
+    #             self.queries_done = 0
     
-            # All queries done, now send results from files
-            if self.stop_by_sigterm:
-                return
+    #         # All queries done, now send results from files
+    #         if self.stop_by_sigterm:
+    #             return
             
-            logging.info(f"Queries completadas, enviando resultados al cliente...")
+    #         logging.info(f"Queries completadas, enviando resultados al cliente...")
 
-            self.send_file_result(RESULT_Q1_FILE)
-            self.send_file_result(RESULT_Q2_FILE)
-            self.send_file_result(RESULT_Q3_FILE)
-            self.send_file_result(RESULT_Q4_FILE)
+    #         self.send_file_result(RESULT_Q1_FILE)
+    #         self.send_file_result(RESULT_Q2_FILE)
+    #         self.send_file_result(RESULT_Q3_FILE)
+    #         self.send_file_result(RESULT_Q4_FILE)
 
-            logging.info(f"Respuesta enviada, persistencia eliminada.")
+    #         logging.info(f"Respuesta enviada, persistencia eliminada.")
     
-        except Exception as e:
-            logging.error(f"Error manejando cliente {addr}: {e}")
+    #     except Exception as e:
+    #         logging.error(f"Error manejando cliente {addr}: {e}")
             
     def send_file_result(self, file):
         with open(file, 'r') as f:

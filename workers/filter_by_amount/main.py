@@ -83,13 +83,6 @@ def on_message_callback(message: bytes, topic_middleware, should_stop):
         client_stats[client_id]['end_messages_received'] += 1
         client_end_messages[client_id] += 1
         print(f"[filter_by_amount] Worker {WORKER_INDEX} received END message {client_end_messages[client_id]}/{NUMBER_OF_HOUR_WORKERS} for client {client_id}", flush=True)
-        
-        # Check if this client has completed (received all END messages) and mark immediately
-        if client_end_messages[client_id] >= NUMBER_OF_HOUR_WORKERS:
-            if client_id not in completed_clients:
-                completed_clients.add(client_id)
-                stats = client_stats[client_id]
-                print(f"[filter_by_amount] Worker {WORKER_INDEX} SUMMARY for client {client_id}: messages_received={stats['messages_received']}, rows_received={stats['rows_received']}, rows_sent={stats['rows_sent']}, end_messages_received={stats['end_messages_received']}")
     
     # Skip if client already completed - check AFTER processing END message
     if client_id in completed_clients:
@@ -124,6 +117,13 @@ def on_message_callback(message: bytes, topic_middleware, should_stop):
         # Count outgoing rows
         rows_sent += len(filtered_rows)
         #print(f"[filter_by_amount] Worker {WORKER_INDEX} sent {len(filtered_rows)} filtered rows for client {client_id}, final_is_last={final_is_last} (total sent: {client_stats[client_id]['rows_sent']})", flush=True)
+        
+        # Mark client as completed and print summary AFTER sending final message
+        if final_is_last == 1:
+            if client_id not in completed_clients:
+                completed_clients.add(client_id)
+                stats = client_stats[client_id]
+                print(f"[filter_by_amount] Worker {WORKER_INDEX} SUMMARY for client {client_id}: messages_received={stats['messages_received']}, rows_received={stats['rows_received']}, rows_sent={stats['rows_sent']}, end_messages_received={stats['end_messages_received']}")
 
 
 def make_on_message_callback(topic_middleware, should_stop):

@@ -178,6 +178,7 @@ def listen_for_sales(items, topic_middleware):
             # Skip if client already completed - check BEFORE any processing
             if client_id in completed_clients:
                 print(f"[categorizer_q2] Worker {WORKER_INDEX} ignoring message from already completed client {client_id}")
+                print(f"[categorizer_q2] Worker {WORKER_INDEX} client {client_id} message is: {parsed_message}")
                 return
             
             client_stats[client_id]['transactions_messages_received'] += 1
