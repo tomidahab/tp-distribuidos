@@ -92,6 +92,9 @@ def setup_queue_and_exchanges():
 
 def listen_for_items():
     items = []
+    clients_ended = set()  # Track which clients have sent END messages
+    expected_clients = 2  # We expect 2 clients: client_1 and client_2
+    
     try:
         global items_exchange
         items_exchange = MessageMiddlewareExchange(
@@ -115,7 +118,7 @@ def listen_for_items():
             client_stats[client_id]['transaction_items_messages_received'] += 1
             client_stats[client_id]['transaction_items_rows_received'] += len(parsed_message['rows'])
             
-            print(f"[categorizer_q2] Worker {WORKER_INDEX} received items message from client {client_id} with {len(parsed_message['rows'])} rows, is_last={is_last}")
+            #print(f"[categorizer_q2] Worker {WORKER_INDEX} received items message from client {client_id} with {len(parsed_message['rows'])} rows, is_last={is_last}")
             
             for row in parsed_message['rows']:
                 dic_fields_row = row_to_dict(row, type_of_message)
@@ -123,8 +126,13 @@ def listen_for_items():
 
             if is_last:
                 client_stats[client_id]['transaction_items_end_received'] += 1
-                print(f"[categorizer_q2] Worker {WORKER_INDEX} received items END message from client {client_id}, stopping item collection.")
-                items_exchange.stop_consuming()
+                clients_ended.add(client_id)
+                print(f"[categorizer_q2] Worker {WORKER_INDEX} received items END message from client {client_id}, clients ended: {len(clients_ended)}/{expected_clients}")
+                
+                # Only stop consuming when ALL clients have sent END messages
+                if len(clients_ended) >= expected_clients:
+                    print(f"[categorizer_q2] Worker {WORKER_INDEX} received END from all {expected_clients} clients, stopping item collection.")
+                    items_exchange.stop_consuming()
         except Exception as e:
             print(f"[categorizer_q2] Error processing item message: {e}", file=sys.stderr)
 
@@ -173,7 +181,7 @@ def listen_for_sales(items, topic_middleware):
             client_stats[client_id]['transactions_messages_received'] += 1
             client_stats[client_id]['transactions_rows_received'] += len(parsed_message['rows'])
             
-            print(f"[categorizer_q2] Worker {WORKER_INDEX} received transactions message from client {client_id} with {len(parsed_message['rows'])} rows, is_last={is_last} (total msgs: {client_stats[client_id]['transactions_messages_received']}, total rows: {client_stats[client_id]['transactions_rows_received']})")
+            #print(f"[categorizer_q2] Worker {WORKER_INDEX} received transactions message from client {client_id} with {len(parsed_message['rows'])} rows, is_last={is_last} (total msgs: {client_stats[client_id]['transactions_messages_received']}, total rows: {client_stats[client_id]['transactions_rows_received']})")
             
             for row in parsed_message['rows']:
                 dic_fields_row = row_to_dict(row, type_of_message)

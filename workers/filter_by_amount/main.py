@@ -69,10 +69,6 @@ def on_message_callback(message: bytes, topic_middleware, should_stop):
     client_id = parsed_message['client_id']
     is_last = parsed_message['is_last']
     
-    # Skip if client already completed
-    if client_id in completed_clients:
-        return
-    
     # Update client stats
     client_stats[client_id]['messages_received'] += 1
     client_stats[client_id]['rows_received'] += len(parsed_message['rows'])
@@ -81,16 +77,21 @@ def on_message_callback(message: bytes, topic_middleware, should_stop):
     incoming_rows = len(parsed_message['rows'])
     rows_received += incoming_rows
     
-    print(f"[filter_by_amount] Worker {WORKER_INDEX} received message from client {client_id} with {incoming_rows} rows, is_last={is_last} (total msgs: {client_stats[client_id]['messages_received']}, total rows: {client_stats[client_id]['rows_received']})")
+    #print(f"[filter_by_amount] Worker {WORKER_INDEX} received message from client {client_id} with {incoming_rows} rows, is_last={is_last} (total msgs: {client_stats[client_id]['messages_received']}, total rows: {client_stats[client_id]['rows_received']})")
     
     if is_last:
         client_stats[client_id]['end_messages_received'] += 1
         client_end_messages[client_id] += 1
         print(f"[filter_by_amount] Worker {WORKER_INDEX} received END message {client_end_messages[client_id]}/{NUMBER_OF_HOUR_WORKERS} for client {client_id}", flush=True)
     
+    # Skip if client already completed - check AFTER processing END message
+    if client_id in completed_clients:
+        print(f"[filter_by_amount] Worker {WORKER_INDEX} ignoring message from already completed client {client_id}")
+        return
+    
     filtered_rows = filter_message_by_amount(parsed_message, MIN_AMOUNT)
     
-    print(f"[filter_by_amount] Worker {WORKER_INDEX} client {client_id}: {len(filtered_rows)} rows passed amount filter (from {len(parsed_message['rows'])} input rows)")
+    #print(f"[filter_by_amount] Worker {WORKER_INDEX} client {client_id}: {len(filtered_rows)} rows passed amount filter (from {len(parsed_message['rows'])} input rows)")
     
     # Check if this client has completed (received all END messages)
     client_completed = client_end_messages[client_id] >= NUMBER_OF_HOUR_WORKERS
@@ -99,18 +100,19 @@ def on_message_callback(message: bytes, topic_middleware, should_stop):
         client_stats[client_id]['rows_sent'] += len(filtered_rows)
         
         global queue_result
-        # Create result queue for each message to avoid connection conflicts
-        queue_result = MessageMiddlewareQueue(RABBITMQ_HOST, RESULT_QUEUE)
+        # Reuse connection instead of creating new one each time
+        if queue_result is None:
+            queue_result = MessageMiddlewareQueue(RABBITMQ_HOST, RESULT_QUEUE)
         
         # Only send is_last=1 if this client has received all END messages
         final_is_last = 1 if (is_last and client_completed) else 0
         new_message, _ = build_message(client_id, type_of_message, final_is_last, filtered_rows)
         queue_result.send(new_message)
-        queue_result.close()
+        # Don't close connection after each message - reuse it!
         
         # Count outgoing rows
         rows_sent += len(filtered_rows)
-        print(f"[filter_by_amount] Worker {WORKER_INDEX} sent {len(filtered_rows)} filtered rows for client {client_id}, final_is_last={final_is_last} (total sent: {client_stats[client_id]['rows_sent']})", flush=True)
+        #print(f"[filter_by_amount] Worker {WORKER_INDEX} sent {len(filtered_rows)} filtered rows for client {client_id}, final_is_last={final_is_last} (total sent: {client_stats[client_id]['rows_sent']})", flush=True)
         
         # Print summary when client completes
         if final_is_last == 1:

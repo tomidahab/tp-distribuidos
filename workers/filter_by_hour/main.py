@@ -104,7 +104,7 @@ def on_message_callback(message: bytes, filter_by_amount_exchange, categorizer_q
     client_stats[client_id]['messages_received'] += 1
     client_stats[client_id]['rows_received'] += len(parsed_message['rows'])
     
-    print(f"[filter_by_hour] Worker {WORKER_INDEX} received message from client {client_id} with {len(parsed_message['rows'])} rows, is_last={is_last} (total msgs: {client_stats[client_id]['messages_received']}, total rows: {client_stats[client_id]['rows_received']})")
+    #print(f"[filter_by_hour] Worker {WORKER_INDEX} received message from client {client_id} with {len(parsed_message['rows'])} rows, is_last={is_last} (total msgs: {client_stats[client_id]['messages_received']}, total rows: {client_stats[client_id]['rows_received']})")
     
     # Count incoming rows
     incoming_rows = len(parsed_message['rows'])
@@ -113,7 +113,7 @@ def on_message_callback(message: bytes, filter_by_amount_exchange, categorizer_q
     
     filtered_rows = filter_message_by_hour(parsed_message, START_HOUR, END_HOUR)
 
-    print(f"[filter_by_hour] Worker {WORKER_INDEX} client {client_id}: {len(filtered_rows)} rows passed hour filter (from {len(parsed_message['rows'])} input rows)")
+    #print(f"[filter_by_hour] Worker {WORKER_INDEX} client {client_id}: {len(filtered_rows)} rows passed hour filter (from {len(parsed_message['rows'])} input rows)")
 
     if (len(filtered_rows) != 0) or (is_last == 1):
         # For Q1 - send to filter_by_amount exchange
@@ -139,7 +139,7 @@ def on_message_callback(message: bytes, filter_by_amount_exchange, categorizer_q
                         new_message, _ = build_message(client_id, type_of_message, 0, worker_rows)
                         filter_by_amount_exchange.send(new_message, routing_key=routing_key)
                         rows_sent_to_amount += len(worker_rows)
-                        print(f"[filter_by_hour] Worker {WORKER_INDEX} client {client_id}: Sent {len(worker_rows)} rows to filter_by_amount {routing_key} (total sent to amount: {client_stats[client_id]['rows_sent_to_amount']}, counter at: {client_stats[client_id]['amount_worker_counter']})")
+                        #print(f"[filter_by_hour] Worker {WORKER_INDEX} client {client_id}: Sent {len(worker_rows)} rows to filter_by_amount {routing_key} (total sent to amount: {client_stats[client_id]['rows_sent_to_amount']}, counter at: {client_stats[client_id]['amount_worker_counter']})")
                         # print(f"[filter_by_hour] Worker {WORKER_INDEX} sent {len(worker_rows)} rows to {routing_key} (total sent to amount: {rows_sent_to_amount})", flush=True)
             
             # For Q3 - group by semester and send to topic exchange
@@ -165,12 +165,12 @@ def on_message_callback(message: bytes, filter_by_amount_exchange, categorizer_q
                         semester_message, _ = build_message(client_id, type_of_message, 0, semester_rows)
                         categorizer_q3_topic_exchange.send(semester_message, routing_key=semester_key)
                         rows_sent_to_q3 += len(semester_rows)
-                        print(f"[filter_by_hour] Worker {WORKER_INDEX} client {client_id}: Sent {len(semester_rows)} rows for {semester_key} to categorizer_q3 (total sent to q3: {client_stats[client_id]['rows_sent_to_q3']})")
+                        #print(f"[filter_by_hour] Worker {WORKER_INDEX} client {client_id}: Sent {len(semester_rows)} rows for {semester_key} to categorizer_q3 (total sent to q3: {client_stats[client_id]['rows_sent_to_q3']})")
                 
-        elif type_of_message == CSV_TYPES_REVERSE['transaction_items']:  # transaction_items
-            print(f"[filter_by_hour] Worker {WORKER_INDEX} received a transaction_items message, that should never happen!", flush=True)
-        else:
-            print(f"[filter_by_hour] Worker {WORKER_INDEX} unknown csv_type: {type_of_message}", file=sys.stderr)
+        #elif type_of_message == CSV_TYPES_REVERSE['transaction_items']:  # transaction_items
+            #print(f"[filter_by_hour] Worker {WORKER_INDEX} received a transaction_items message, that should never happen!", flush=True)
+        #else:
+            #print(f"[filter_by_hour] Worker {WORKER_INDEX} unknown csv_type: {type_of_message}", file=sys.stderr)
 
     # Handle END message when last message is received
     if is_last == 1:

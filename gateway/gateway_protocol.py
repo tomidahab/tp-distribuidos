@@ -17,15 +17,6 @@ CATEGORIZER_Q2_ITEMS_FANOUT_EXCHANGE = 'categorizer_q2_items_fanout_exchange'
 
 BIRTH_DIC_DATA_RESPONSES_QUEUE = os.environ.get('Q4_DATA_RESPONSES_QUEUE', 'gateway_client_data_queue')
 
-# Instancias de exchanges y queues (inicialización perezosa)
-filter_by_year_transactions_exchange = None
-filter_by_year_transaction_items_exchange = None
-categorizer_query2_items_queue = None
-categorizer_query2_transactions_queue = None
-categorizer_query2_items_exchange = None
-
-birth_dic_data_responses_queue = None
-
 # Round-robin counters for distributing messages across workers - PER CLIENT
 transactions_worker_counter = {}  # client_id -> counter
 transaction_items_worker_counter = {}  # client_id -> counter
@@ -52,45 +43,36 @@ def send_response(skt: socket, response_type, response = ""):
     send_h_str(skt, response)
     return response_type, response
 
-def handle_and_forward_chunk(client_id: str, csv_type: int, is_last: int, chunk: bytes) -> int:
+def handle_and_forward_chunk(client_id: str, csv_type: int, is_last: int, chunk: bytes, 
+                             transactions_exchange, transaction_items_exchange, 
+                             categorizer_items_exchange, birth_dic_queue) -> int:
     """
     Construye el mensaje usando el protocolo y lo envía al exchange correspondiente por RabbitMQ.
     Usa round-robin para distribuir entre múltiples workers de filter_by_year.
     """
-    global filter_by_year_transactions_exchange, filter_by_year_transaction_items_exchange, categorizer_query2_items_queue, categorizer_query2_transactions_queue, categorizer_query2_items_exchange
     global transactions_worker_counter, transaction_items_worker_counter
-    global birth_dic_data_responses_queue
 
     rows = chunk.decode("utf-8").splitlines()
     message, _ = build_message(client_id, csv_type, is_last, rows)
-    MAX_RETRIES = 10
-    RETRY_DELAY = 3
+    MAX_RETRIES = 3
+    RETRY_DELAY = 0.1  # Reduced from 3 seconds to 100ms
+    
     try:
-            
         if csv_type == CSV_TYPES_REVERSE["transaction_items"]:  # transaction_items
             for attempt in range(MAX_RETRIES):
                 try:
-                    if filter_by_year_transaction_items_exchange is None:
-                        filter_by_year_transaction_items_exchange = MessageMiddlewareExchange(
-                            RABBITMQ_HOST, 
-                            FILTER_BY_YEAR_TRANSACTION_ITEMS_EXCHANGE, 
-                            'topic',
-                            ""  # Empty queue name since we're only sending
-                        )
-                    
                     # Round-robin distribution to workers - PER CLIENT
                     if client_id not in transaction_items_worker_counter:
                         transaction_items_worker_counter[client_id] = 0
                     worker_index = transaction_items_worker_counter[client_id] % NUMBER_OF_YEAR_WORKERS
                     routing_key = f"year.{worker_index}"
                     # NOTE: that from here, we are already sending an is_last message to a worker (but also sending to all in send_end_messages_to_filter_by_year() so 1 of the workers will receive the is_last flasg 2 times)
-                    filter_by_year_transaction_items_exchange.send(message, routing_key=routing_key)
+                    transaction_items_exchange.send(message, routing_key=routing_key)
                     transaction_items_worker_counter[client_id] += 1
-                    print(f"[gateway_protocol] Sent transaction_items from {client_id} to worker {worker_index} with routing key {routing_key} (counter: {transaction_items_worker_counter[client_id]})", flush=True)
+                    #print(f"[gateway_protocol] Sent transaction_items from {client_id} to worker {worker_index} with routing key {routing_key} (counter: {transaction_items_worker_counter[client_id]})", flush=True)
                     break
                 except Exception as e:
-                    # print(f"[gateway_protocol] Retry {attempt+1}/{MAX_RETRIES} for transaction_items exchange: {e}", file=sys.stderr)
-                    filter_by_year_transaction_items_exchange = None
+                    print(f"[gateway_protocol] Retry {attempt+1}/{MAX_RETRIES} for transaction_items exchange: {e}", file=sys.stderr)
                     time.sleep(RETRY_DELAY)
             else:
                 print(f"[gateway_protocol] Failed to connect to transaction_items exchange after {MAX_RETRIES} retries", file=sys.stderr)
@@ -99,54 +81,36 @@ def handle_and_forward_chunk(client_id: str, csv_type: int, is_last: int, chunk:
             # Enviar a filter_by_year_transactions_exchange
             for attempt in range(MAX_RETRIES):
                 try:
-                    if filter_by_year_transactions_exchange is None:
-                        filter_by_year_transactions_exchange = MessageMiddlewareExchange(
-                            RABBITMQ_HOST, 
-                            FILTER_BY_YEAR_TRANSACTIONS_EXCHANGE, 
-                            'topic',
-                            ""  # Empty queue name since we're only sending
-                        )
-                    
                     # Round-robin distribution to workers - PER CLIENT
                     if client_id not in transactions_worker_counter:
                         transactions_worker_counter[client_id] = 0
                     worker_index = transactions_worker_counter[client_id] % NUMBER_OF_YEAR_WORKERS
                     routing_key = f"year.{worker_index}"
-                    filter_by_year_transactions_exchange.send(message, routing_key=routing_key)
+                    transactions_exchange.send(message, routing_key=routing_key)
                     transactions_worker_counter[client_id] += 1
-                    print(f"[gateway_protocol] Sent transactions from {client_id} to worker {worker_index} with routing key {routing_key} (counter: {transactions_worker_counter[client_id]})", flush=True)
+                    #print(f"[gateway_protocol] Sent transactions from {client_id} to worker {worker_index} with routing key {routing_key} (counter: {transactions_worker_counter[client_id]})", flush=True)
                     break
                 except Exception as e:
-                    # print(f"[gateway_protocol] Retry {attempt+1}/{MAX_RETRIES} for transactions exchange: {e}", file=sys.stderr)
-                    filter_by_year_transactions_exchange = None
+                    print(f"[gateway_protocol] Retry {attempt+1}/{MAX_RETRIES} for transactions exchange: {e}", file=sys.stderr)
                     time.sleep(RETRY_DELAY)
             else:
                 print(f"[gateway_protocol] Failed to connect to transactions exchange after {MAX_RETRIES} retries", file=sys.stderr)
                 return -1
-            
+                
         elif csv_type == CSV_TYPES_REVERSE["menu_items"]:  # menu_items
             print(f"[gateway_protocol] Forwarding menu_items to categorizer_q2_items_fanout_exchange")
             for attempt in range(MAX_RETRIES):
                 try:
-                    if categorizer_query2_items_exchange is None:
-                        categorizer_query2_items_exchange = MessageMiddlewareExchange(
-                            RABBITMQ_HOST,
-                            CATEGORIZER_Q2_ITEMS_FANOUT_EXCHANGE,
-                            "fanout",
-                            ""  
-                        )
-                    categorizer_query2_items_exchange.send(message)
+                    categorizer_items_exchange.send(message)
                     print(f"[gateway_protocol] Successfully sent menu_items to fanout exchange")
                     break
                 except Exception as e:
                     print(f"[gateway_protocol] Retry {attempt+1}/{MAX_RETRIES} for menu_items fanout exchange: {e}", file=sys.stderr)
-                    categorizer_query2_items_exchange = None
                     time.sleep(RETRY_DELAY)
             else:
                 print(f"[gateway_protocol] Failed to connect to menu_items fanout exchange after {MAX_RETRIES} retries", file=sys.stderr)
                 return -1
         elif csv_type == CSV_TYPES_REVERSE["users"]:  # users
-            
             q4_rows = []
             for row in rows:
                 row_items = row.split(",")
@@ -155,13 +119,10 @@ def handle_and_forward_chunk(client_id: str, csv_type: int, is_last: int, chunk:
 
             for attempt in range(MAX_RETRIES):
                 try:
-                    if birth_dic_data_responses_queue is None:
-                        birth_dic_data_responses_queue = MessageMiddlewareQueue(RABBITMQ_HOST, BIRTH_DIC_DATA_RESPONSES_QUEUE)
-                    birth_dic_data_responses_queue.send(message)
+                    birth_dic_queue.send(message)
                     break
                 except Exception as e:
                     print(f"[gateway_protocol] Retry {attempt+1}/{MAX_RETRIES} for users queue: {e}", file=sys.stderr)
-                    birth_dic_data_responses_queue = None
                     time.sleep(RETRY_DELAY)
             else:
                 print(f"[gateway_protocol] Failed to connect to users queue after {MAX_RETRIES} retries", file=sys.stderr)
@@ -172,14 +133,13 @@ def handle_and_forward_chunk(client_id: str, csv_type: int, is_last: int, chunk:
         return -1
     return 0
 
-def send_end_messages_to_filter_by_year():
+def send_end_messages_to_filter_by_year(transactions_exchange, transaction_items_exchange):
     """
     Envía mensajes END (rows vacías con is_last=True) a todos los workers de filter_by_year
     tanto para transactions como para transaction_items.
     """
-    global filter_by_year_transactions_exchange, filter_by_year_transaction_items_exchange
-    MAX_RETRIES = 10
-    RETRY_DELAY = 3
+    MAX_RETRIES = 3
+    RETRY_DELAY = 0.1
     
     print(f"[gateway_protocol] Sending END messages to {NUMBER_OF_YEAR_WORKERS} filter_by_year workers", flush=True)
     
@@ -190,20 +150,11 @@ def send_end_messages_to_filter_by_year():
         
         for attempt in range(MAX_RETRIES):
             try:
-                if filter_by_year_transactions_exchange is None:
-                    filter_by_year_transactions_exchange = MessageMiddlewareExchange(
-                        RABBITMQ_HOST, 
-                        FILTER_BY_YEAR_TRANSACTIONS_EXCHANGE, 
-                        'topic',
-                        ""
-                    )
-                
-                filter_by_year_transactions_exchange.send(end_message, routing_key=routing_key)
+                transactions_exchange.send(end_message, routing_key=routing_key)
                 print(f"[gateway_protocol] Sent transactions END message to worker {worker_index} with routing key {routing_key}", flush=True)
                 break
             except Exception as e:
                 print(f"[gateway_protocol] Retry {attempt+1}/{MAX_RETRIES} for transactions END message to worker {worker_index}: {e}", file=sys.stderr)
-                filter_by_year_transactions_exchange = None
                 time.sleep(RETRY_DELAY)
         else:
             print(f"[gateway_protocol] Failed to send transactions END message to worker {worker_index} after {MAX_RETRIES} retries", file=sys.stderr)
@@ -215,34 +166,24 @@ def send_end_messages_to_filter_by_year():
         
         for attempt in range(MAX_RETRIES):
             try:
-                if filter_by_year_transaction_items_exchange is None:
-                    filter_by_year_transaction_items_exchange = MessageMiddlewareExchange(
-                        RABBITMQ_HOST, 
-                        FILTER_BY_YEAR_TRANSACTION_ITEMS_EXCHANGE, 
-                        'topic',
-                        ""
-                    )
-                
-                filter_by_year_transaction_items_exchange.send(end_message, routing_key=routing_key)
+                transaction_items_exchange.send(end_message, routing_key=routing_key)
                 print(f"[gateway_protocol] Sent transaction_items END message to worker {worker_index} with routing key {routing_key}", flush=True)
                 break
             except Exception as e:
                 print(f"[gateway_protocol] Retry {attempt+1}/{MAX_RETRIES} for transaction_items END message to worker {worker_index}: {e}", file=sys.stderr)
-                filter_by_year_transaction_items_exchange = None
                 time.sleep(RETRY_DELAY)
         else:
             print(f"[gateway_protocol] Failed to send transaction_items END message to worker {worker_index} after {MAX_RETRIES} retries", file=sys.stderr)
     
     print(f"[gateway_protocol] Finished sending END messages to all {NUMBER_OF_YEAR_WORKERS} filter_by_year workers", flush=True)
 
-def send_end_messages_to_all_workers(client_id: str):
+def send_end_messages_to_all_workers(client_id: str, transactions_exchange, transaction_items_exchange):
     """
     Envía mensajes END (rows vacías con is_last=True) a todos los workers
     para un cliente específico, tanto para transactions como para transaction_items.
     """
-    global filter_by_year_transactions_exchange, filter_by_year_transaction_items_exchange
-    MAX_RETRIES = 10
-    RETRY_DELAY = 3
+    MAX_RETRIES = 3
+    RETRY_DELAY = 0.1
     
     print(f"[gateway_protocol] Sending END messages for client {client_id} to all {NUMBER_OF_YEAR_WORKERS} filter_by_year workers", flush=True)
     
@@ -253,23 +194,14 @@ def send_end_messages_to_all_workers(client_id: str):
         
         for attempt in range(MAX_RETRIES):
             try:
-                if filter_by_year_transactions_exchange is None:
-                    filter_by_year_transactions_exchange = MessageMiddlewareExchange(
-                        RABBITMQ_HOST, 
-                        FILTER_BY_YEAR_TRANSACTIONS_EXCHANGE, 
-                        'topic',
-                        ""
-                    )
-                
-                filter_by_year_transactions_exchange.send(end_message, routing_key=routing_key)
+                transactions_exchange.send(end_message, routing_key=routing_key)
                 print(f"[gateway_protocol] Sent transactions END message for client {client_id} to worker {worker_index}", flush=True)
                 break
             except Exception as e:
                 print(f"[gateway_protocol] Retry {attempt+1}/{MAX_RETRIES} for transactions END message to worker {worker_index}: {e}", file=sys.stderr)
-                if attempt == MAX_RETRIES - 1:
-                    print(f"[gateway_protocol] Failed to send transactions END message for client {client_id} to worker {worker_index} after {MAX_RETRIES} retries", file=sys.stderr)
-                else:
-                    time.sleep(RETRY_DELAY)
+                time.sleep(RETRY_DELAY)
+        else:
+            print(f"[gateway_protocol] Failed to send transactions END message for client {client_id} to worker {worker_index} after {MAX_RETRIES} retries", file=sys.stderr)
     
     # Send END messages for transaction_items to ALL workers
     for worker_index in range(NUMBER_OF_YEAR_WORKERS):
@@ -278,23 +210,14 @@ def send_end_messages_to_all_workers(client_id: str):
         
         for attempt in range(MAX_RETRIES):
             try:
-                if filter_by_year_transaction_items_exchange is None:
-                    filter_by_year_transaction_items_exchange = MessageMiddlewareExchange(
-                        RABBITMQ_HOST, 
-                        FILTER_BY_YEAR_TRANSACTION_ITEMS_EXCHANGE, 
-                        'topic',
-                        ""
-                    )
-                
-                filter_by_year_transaction_items_exchange.send(end_message, routing_key=routing_key)
+                transaction_items_exchange.send(end_message, routing_key=routing_key)
                 print(f"[gateway_protocol] Sent transaction_items END message for client {client_id} to worker {worker_index}", flush=True)
                 break
             except Exception as e:
                 print(f"[gateway_protocol] Retry {attempt+1}/{MAX_RETRIES} for transaction_items END message to worker {worker_index}: {e}", file=sys.stderr)
-                if attempt == MAX_RETRIES - 1:
-                    print(f"[gateway_protocol] Failed to send transaction_items END message for client {client_id} to worker {worker_index} after {MAX_RETRIES} retries", file=sys.stderr)
-                else:
-                    time.sleep(RETRY_DELAY)
+                time.sleep(RETRY_DELAY)
+        else:
+            print(f"[gateway_protocol] Failed to send transaction_items END message for client {client_id} to worker {worker_index} after {MAX_RETRIES} retries", file=sys.stderr)
     
     print(f"[gateway_protocol] Finished sending all END messages for client {client_id} to all {NUMBER_OF_YEAR_WORKERS} filter_by_year workers", flush=True)
 

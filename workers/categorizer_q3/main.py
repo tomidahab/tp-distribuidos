@@ -30,8 +30,8 @@ NUMBER_OF_HOUR_WORKERS = int(os.environ.get('NUMBER_OF_HOUR_WORKERS', '3'))
 
 # Define semester mapping for worker distribution
 SEMESTER_MAPPING = {
-    0: ['semester.2023-2', 'semester.2024-2'],  # Worker 0: second semesters
-    1: ['semester.2024-1', 'semester.2025-1']   # Worker 1: first semesters
+    0: ['semester.2024-1', 'semester.2024-2'],  # Worker 0: second semesters
+    1: ['semester.2023-2', 'semester.2025-1']   # Worker 1: first semesters
 }
 
 topic_middleware = None
@@ -101,12 +101,17 @@ def listen_for_transactions():
             client_id = parsed_message['client_id']
             is_last = parsed_message['is_last']
             
-            # Skip if client already completed - check BEFORE any processing
+            #print(f"[categorizer_q3] Worker {WORKER_INDEX} processing message for client {client_id}, is_last: {is_last}, rows: {len(parsed_message['rows'])}", flush=True)
+
+            # Handle END messages per client BEFORE checking completed_clients
+            if is_last:
+                client_end_messages[client_id] += 1
+                print(f"[categorizer_q3] Worker {WORKER_INDEX} received END message {client_end_messages[client_id]}/{NUMBER_OF_HOUR_WORKERS} for client {client_id}", flush=True)
+            
+            # Skip if client already completed - check AFTER processing END message
             if client_id in completed_clients:
                 print(f"[categorizer_q3] Worker {WORKER_INDEX} ignoring message from already completed client {client_id}")
                 return
-            
-            print(f"[categorizer_q3] Worker {WORKER_INDEX} processing message for client {client_id}, is_last: {is_last}, rows: {len(parsed_message['rows'])}", flush=True)
 
             # Process regular rows
             for row in parsed_message['rows']:
@@ -137,22 +142,17 @@ def listen_for_transactions():
                     print(f"[categorizer_q3] Error processing row: {row_error}", file=sys.stderr)
                     continue
                 
-            # Handle END messages per client
-            if is_last:
-                client_end_messages[client_id] += 1
-                print(f"[categorizer_q3] Worker {WORKER_INDEX} received END message {client_end_messages[client_id]}/{NUMBER_OF_HOUR_WORKERS} for client {client_id}", flush=True)
+            # Check if this client has received all END messages and complete processing
+            if is_last and client_end_messages[client_id] >= NUMBER_OF_HOUR_WORKERS:
+                print(f"[categorizer_q3] Worker {WORKER_INDEX} completed all data for client {client_id}, sending results", flush=True)
+                completed_clients.add(client_id)
                 
-                # Check if this client has received all END messages
-                if client_end_messages[client_id] >= NUMBER_OF_HOUR_WORKERS:
-                    print(f"[categorizer_q3] Worker {WORKER_INDEX} completed all data for client {client_id}, sending results", flush=True)
-                    completed_clients.add(client_id)
-                    
-                    # Send results for this client
-                    send_client_results(client_id, client_semester_store_stats[client_id])
-                    
-                    # Don't delete client data yet - keep it for potential debugging
-                    # but mark as completed
-                    print(f"[categorizer_q3] Client {client_id} processing completed")
+                # Send results for this client
+                send_client_results(client_id, client_semester_store_stats[client_id])
+                
+                # Don't delete client data yet - keep it for potential debugging
+                # but mark as completed
+                print(f"[categorizer_q3] Client {client_id} processing completed")
         except Exception as e:
             print(f"[categorizer_q3] Error processing transaction message: {e}", file=sys.stderr)
 
