@@ -115,6 +115,12 @@ class Gateway:
         except Exception as e:
             logging.error(f"[{result_queue}] Error consumiendo mensajes: {e}")
 
+    def get_available_id(self):
+        id = 1 # Starting id with 1
+        while f"client_{id}" in self.clients:
+            id += 1
+        return f"client_{id}"
+
     def run(self):
         # Start result queue listener threads
         q1_result_thread = threading.Thread(target=self.listen_queue_result, args=(RESULT_Q1_QUEUE,), daemon=True)
@@ -137,14 +143,11 @@ class Gateway:
             server.listen(10)  # Increased backlog for multiple clients
             logging.info(f"Multi-client server listening on {HOST}:{PORT}...")
 
-            incremental_id = 0
             while not self.stop_by_sigterm:
                 try:
                     conn, addr = server.accept()
-                    incremental_id += 1
-                    client_id = f"client_{incremental_id}"
-
                     with self.clients_lock:
+                        client_id = self.get_available_id()
                         self.clients[client_id] = ClientHandler(client_id, conn)
                         self.clients[client_id].start()
                         logging.info(f"Started thread for {client_id} from {addr}")

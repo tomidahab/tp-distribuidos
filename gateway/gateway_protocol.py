@@ -45,7 +45,7 @@ def send_response(skt: socket, response_type, response = ""):
 
 def handle_and_forward_chunk(client_id: str, csv_type: int, is_last: int, chunk: bytes, 
                              transactions_exchange, transaction_items_exchange, 
-                             categorizer_items_exchange, birth_dic_queue) -> int:
+                             categorizer_items_exchange, birth_dic_queue_exchange) -> int:
     """
     Construye el mensaje usando el protocolo y lo envía al exchange correspondiente por RabbitMQ.
     Usa round-robin para distribuir entre múltiples workers de filter_by_year.
@@ -120,7 +120,8 @@ def handle_and_forward_chunk(client_id: str, csv_type: int, is_last: int, chunk:
 
             for attempt in range(MAX_RETRIES):
                 try:
-                    birth_dic_queue.send(message)
+                    routing_key = f"client.{client_id}"
+                    birth_dic_queue_exchange.send(message, routing_key=routing_key)
                     break
                 except Exception as e:
                     print(f"[gateway_protocol] Retry {attempt+1}/{MAX_RETRIES} for users queue: {e}", file=sys.stderr)

@@ -68,7 +68,6 @@ def listen_for_top_users():
         if message_count_by_client[client_id] == CATEGORIZER_Q4_WORKERS and client_id not in threads_started:
             print(f"[birthday_dictionary] Top users: {messages_by_client[client_id]}")
             threads_started.add(client_id)
-            request_client_data_for_client(client_id)
             thread = threading.Thread(
                 target=listen_and_process_client_data,
                 args=(client_id, user_ids_by_client[client_id], messages_by_client[client_id]),
@@ -86,15 +85,27 @@ def listen_for_top_users():
         receiver_queue.close()
 
 def listen_and_process_client_data(client_id, user_ids, message):
-    client_birthdays = listen_for_client_data(user_ids)
+    client_birthdays = listen_for_client_data(client_id, user_ids)
     enriched_message = append_birthdays_to_message(message, client_birthdays)
     send_enriched_message_to_gateway(enriched_message)
 
-def listen_for_client_data(user_ids):
+def listen_for_client_data(target_client_id, user_ids):
     client_birthdays = {}
     global gateway_client_data_queue
-    gateway_client_data_queue = MessageMiddlewareQueue(RABBITMQ_HOST, GATEWAY_CLIENT_DATA_QUEUE)
-    print(f"[birthday_dictionary] Listening for client data on queue: {GATEWAY_CLIENT_DATA_QUEUE}")
+
+    queue_name = f"{GATEWAY_CLIENT_DATA_QUEUE}_WORKER_{WORKER_INDEX}" # Queue per worker
+
+    gateway_client_data_queue = MessageMiddlewareExchange(
+        host=RABBITMQ_HOST,
+        exchange_name="birth_queue_users_exchange",
+        exchange_type='topic',
+        queue_name=queue_name,
+        routing_keys=[f"client.{target_client_id}"]
+    )
+    print(f"[birthday_dictionary] Listening for client data on queue: {queue_name} with routing key: client.{target_client_id}")
+
+    # Once the exchange is created, request the data
+    request_client_data_for_client(target_client_id)
 
     def on_message_callback(message: bytes):
         parsed_message = parse_message(message)
@@ -105,7 +116,7 @@ def listen_for_client_data(user_ids):
                 if client_id in user_ids:
                     client_birthdays[client_id] = birthday
         if parsed_message['is_last']:
-            print("[birthday_dictionary] Received end message, stopping client data collection.")
+            print(f"[birthday_dictionary] Received end message for {target_client_id} vs {parsed_message['client_id']}, stopping client data collection.")
             gateway_client_data_queue.stop_consuming()
 
     try:

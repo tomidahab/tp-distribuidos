@@ -45,10 +45,12 @@ class ClientHandler(threading.Thread):
             "fanout",
             ""
         )  
-        self.birth_dic_queue = MessageMiddlewareQueue(
-            RABBITMQ_HOST, 
-            os.environ.get('Q4_DATA_RESPONSES_QUEUE', 'gateway_client_data_queue')
-        )
+        self.birth_dic_exchange = MessageMiddlewareExchange(
+            RABBITMQ_HOST,
+            'birth_queue_users_exchange',
+            "topic",
+            ""
+        )  
 
     def save_temp_results(self, result_file, iterable):
         with open(result_file, 'a') as f:  # Changed from 'w+' to 'a' to append instead of overwrite
@@ -119,7 +121,7 @@ class ClientHandler(threading.Thread):
                         from gateway_protocol import handle_and_forward_chunk
                         handle_and_forward_chunk(self.client_id, file_code, 1 if received >= filesize and last_file else 0, chunk,
                                                self.transactions_exchange, self.transaction_items_exchange, 
-                                               self.categorizer_items_exchange, self.birth_dic_queue)
+                                               self.categorizer_items_exchange, self.birth_dic_exchange)
 
             total_files_received += 1
             total_bytes_received += filesize
