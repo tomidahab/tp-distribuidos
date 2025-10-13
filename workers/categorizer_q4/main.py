@@ -63,6 +63,7 @@ def listen_for_transactions():
             
             # Skip if client already completed
             if client_id in completed_clients:
+                print(f"[categorizer_q4] Worker {WORKER_INDEX} ignoring message for already completed client {client_id}")
                 return
                 
             # print(f"[categorizer_q4] Worker {WORKER_INDEX} processing message for client {client_id}, is_last={is_last}, rows: {len(parsed_message['rows'])}")
@@ -111,51 +112,33 @@ def get_top_users_per_store(store_user_counter, top_n=3):
     return top_users
 
 def send_client_q4_results(client_id, store_user_counter):
-    """Send Q4 results for specific client to birthday_dictionary"""
+    """Send Q4 results for specific client to birthday_dictionary as a single message"""
     try:
-        global birthday_dict_queue
-        if birthday_dict_queue is None:
-            birthday_dict_queue = MessageMiddlewareQueue(RABBITMQ_HOST, BIRTHDAY_DICT_QUEUE)
-        
+        # Calculate worker_index for this client
+        worker_index = int(client_id.split("_")[1]) % AMOUNT_OF_WORKERS
+        # Use topic exchange and routing key client.{worker_index}
+        birthday_dict_exchange = MessageMiddlewareExchange(
+            host=RABBITMQ_HOST,
+            exchange_name='birthday_dictionary_exchange',
+            exchange_type='topic',
+            queue_name='',
+            routing_keys=None
+        )
         # Get top users per store for this client
         top_users = get_top_users_per_store(store_user_counter, top_n=3)
-        
-        # Send one message per store with its top 3 users
+        # Prepare all rows for all stores in one message
+        rows = []
         for store_id, users in top_users.items():
-            rows = []
             for user_id, count in users:
                 rows.append(f"{store_id},{user_id},{count}")
-            # Send with client_id
-            message, _ = build_message(client_id, 4, 0, rows)
-            birthday_dict_queue.send(message)
-            print(f"[categorizer_q4] Worker {WORKER_INDEX} sent top users for store {store_id} (client {client_id}) to Birthday_Dictionary: {rows}")
-        
-        # Send END message for this client
-        end_message, _ = build_message(client_id, 4, 1, [])
-        birthday_dict_queue.send(end_message)
-        print(f"[categorizer_q4] Worker {WORKER_INDEX} sent END message for client {client_id} to Birthday_Dictionary")
-        
+        # Send a single message with all top users for all stores
+        message, _ = build_message(client_id, 4, 1, rows)
+        birthday_dict_exchange.send(message, routing_key=f"client.{worker_index}")
+        print(f"[categorizer_q4] Worker {WORKER_INDEX} sent ALL top users for client {client_id} to Birthday_Dictionary with routing key client.{worker_index}: {rows}")
+        birthday_dict_exchange.close()
     except Exception as e:
         print(f"[categorizer_q4] ERROR sending results for client {client_id}: {e}", file=sys.stderr)
         # Don't raise to avoid stopping other clients
-
-def send_results_to_birthday_dict(top_users):
-    global birthday_dict_queue
-    birthday_dict_queue = MessageMiddlewareQueue(RABBITMQ_HOST, BIRTHDAY_DICT_QUEUE)
-    # Send one message per store with its top 3 users
-    for store_id, users in top_users.items():
-        rows = []
-        for user_id, count in users:
-            rows.append(f"{store_id},{user_id},{count}")
-        # is_last=0 for regular messages
-        message, _ = build_message(0, 4, 0, rows)
-        birthday_dict_queue.send(message)
-        print(f"[categorizer_q4] Sent top users for store {store_id} to Birthday_Dictionary: {rows}")
-    # After all stores, send the end message
-    end_message, _ = build_message(0, 4, 1, [])
-    birthday_dict_queue.send(end_message)
-    print("[categorizer_q4] Sent END message to Birthday_Dictionary.")
-    birthday_dict_queue.close()
 
 def main():
     signal.signal(signal.SIGTERM, _sigterm_handler)

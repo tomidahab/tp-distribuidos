@@ -145,9 +145,6 @@ def listen_for_transactions():
                         client_semester_store_stats[client_id][key] += payment_value
                         processed_rows += 1
                         
-                        # Log progress for large datasets
-                        if processed_rows % 10000 == 0:
-                            print(f"[categorizer_q3] Worker {WORKER_INDEX} processed {processed_rows} rows so far", flush=True)
                     elif payment_value == 0.0:
                         print(f"[categorizer_q3] Warning: Payment value is 0.0 for row: {row}", file=sys.stderr)
                         
