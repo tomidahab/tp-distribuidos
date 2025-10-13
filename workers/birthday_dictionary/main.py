@@ -44,6 +44,8 @@ def listen_for_top_users():
 
     messages_by_client = defaultdict(list)
     user_ids_by_client = defaultdict(set)
+    message_count_by_client = defaultdict(int)
+    threads_started = set()
 
     def on_message_callback(message: bytes):
         parsed_message = parse_message(message)
@@ -55,17 +57,24 @@ def listen_for_top_users():
                 store_id, user_id, count = parts
                 top_users.append({'store_id': store_id, 'user_id': user_id, 'count': int(count)})
                 user_ids_by_client[client_id].add(user_id)
-        messages_by_client[client_id].append({'client_id': client_id, 'top_users': top_users})
-        print(f"[birthday_dictionary] Received and processed message for client {client_id}, message with top users: {top_users}")
-        # Request client data for this client
-        request_client_data_for_client(client_id)
-        # Start a thread to listen for client data for this client
-        thread = threading.Thread(
-            target=listen_and_process_client_data,
-            args=(client_id, user_ids_by_client[client_id], messages_by_client[client_id]),
-            daemon=True
-        )
-        thread.start()
+        # Instead of appending a new dict for each message, extend the list of top users
+        if client_id not in messages_by_client:
+            messages_by_client[client_id] = {'client_id': client_id, 'top_users': []}
+        messages_by_client[client_id]['top_users'].extend(top_users)
+        message_count_by_client[client_id] += 1
+        print(f"[birthday_dictionary] Received message {message_count_by_client[client_id]}/{CATEGORIZER_Q4_WORKERS} for client {client_id}")
+
+        # Only proceed when all expected messages for this client have arrived
+        if message_count_by_client[client_id] == CATEGORIZER_Q4_WORKERS and client_id not in threads_started:
+            print(f"[birthday_dictionary] Top users: {messages_by_client[client_id]}")
+            threads_started.add(client_id)
+            request_client_data_for_client(client_id)
+            thread = threading.Thread(
+                target=listen_and_process_client_data,
+                args=(client_id, user_ids_by_client[client_id], messages_by_client[client_id]),
+                daemon=True
+            )
+            thread.start()
 
     try:
         receiver_queue.start_consuming(on_message_callback)
@@ -76,10 +85,10 @@ def listen_for_top_users():
     finally:
         receiver_queue.close()
 
-def listen_and_process_client_data(client_id, user_ids, messages):
+def listen_and_process_client_data(client_id, user_ids, message):
     client_birthdays = listen_for_client_data(user_ids)
-    enriched_messages = append_birthdays_to_messages(messages, client_birthdays)
-    send_enriched_messages_to_gateway(enriched_messages)
+    enriched_message = append_birthdays_to_message(message, client_birthdays)
+    send_enriched_message_to_gateway(enriched_message)
 
 def listen_for_client_data(user_ids):
     client_birthdays = {}
@@ -123,21 +132,27 @@ def append_birthdays_to_messages(messages, client_birthdays):
         enriched_messages.append(enriched_msg)
     return enriched_messages
 
-def send_enriched_messages_to_gateway(enriched_messages):
+def append_birthdays_to_message(message, client_birthdays):
+    enriched_top_users = []
+    for user in message.get('top_users', []):
+        user_id = user['user_id']
+        user_with_birthday = dict(user)
+        user_with_birthday['birthday'] = client_birthdays.get(user_id)
+        enriched_top_users.append(user_with_birthday)
+    enriched_message = dict(message)
+    enriched_message['top_users'] = enriched_top_users
+    return enriched_message
+
+def send_enriched_message_to_gateway(enriched_message):
     query4_answer_queue = MessageMiddlewareQueue(RABBITMQ_HOST, QUERY4_ANSWER_QUEUE)
-    for msg in enriched_messages:
-        # Prepare rows as CSV lines for each top user
-        rows = []
-        for user in msg.get('top_users', []):
-            # Format: store_id,user_id,count,birthday
-            row = f"{user['store_id']},{user['user_id']},{user['count']},{user.get('birthday', '')}"
-            rows.append(row)
-        # Use client_id from the message for the build_message
-        client_id = msg.get('client_id', 0)
-        message, _ = build_message(client_id, 4, int(msg.get('is_last', 0)), rows)
-        query4_answer_queue.send(message)
-        print(f"[birthday_dictionary] Sent enriched message to gateway for client_id {client_id}: {rows}")
-        print(f"[birthday_dictionary] Enriched message sent: {message}")
+    rows = []
+    for user in enriched_message.get('top_users', []):
+        row = f"{user['store_id']},{user['user_id']},{user['count']},{user.get('birthday', '')}"
+        rows.append(row)
+    client_id = enriched_message.get('client_id', 0)
+    message, _ = build_message(client_id, 4, 1, rows)
+    query4_answer_queue.send(message)
+    print(f"[birthday_dictionary] Sent enriched message to gateway for client_id {client_id}: {rows}")
     query4_answer_queue.close()
 
 def request_client_data_for_client(client_id):
