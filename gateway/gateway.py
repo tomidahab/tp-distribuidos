@@ -423,9 +423,6 @@ class Gateway:
                     received += len(chunk)
                     chunks_processed += 1
                     
-                    if file_code in [1, 2]:  # transactions or transaction_items
-                        if chunks_processed % 10 == 0 or received >= filesize:  # Log every 10th chunk or at end
-                            logging.info(f"[CLIENT {client_id}] Processing chunk {chunks_processed} for {filename}, received: {received}/{filesize} bytes")
                     
                     if len(chunk) != 0:
                         from gateway_protocol import handle_and_forward_chunk

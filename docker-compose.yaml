@@ -359,6 +359,60 @@ services:
       - rabbitmq_server
       - gateway
 
+  birthday_dictionary_worker_0:
+    build:
+      context: .
+      dockerfile: ./workers/birthday_dictionary/Dockerfile
+    container_name: birthday_dictionary_worker_0
+    environment:
+      - RABBITMQ_HOST=rabbitmq_server
+      - RECEIVER_QUEUE=birthday_dictionary_worker_0_queue
+      - RECEIVER_EXCHANGE=birthday_dictionary_exchange
+      - GATEWAY_REQUEST_QUEUE=birthday_dictionary_client_request_queue
+      - GATEWAY_CLIENT_DATA_QUEUE=gateway_client_data_queue
+      - QUERY4_ANSWER_QUEUE=query4_answer_queue
+      - AMOUNT_OF_WORKERS=3
+      - WORKER_INDEX=0
+    depends_on:
+      - rabbitmq_server
+      - gateway
+
+  birthday_dictionary_worker_1:
+    build:
+      context: .
+      dockerfile: ./workers/birthday_dictionary/Dockerfile
+    container_name: birthday_dictionary_worker_1
+    environment:
+      - RABBITMQ_HOST=rabbitmq_server
+      - RECEIVER_QUEUE=birthday_dictionary_worker_1_queue
+      - RECEIVER_EXCHANGE=birthday_dictionary_exchange
+      - GATEWAY_REQUEST_QUEUE=birthday_dictionary_client_request_queue
+      - GATEWAY_CLIENT_DATA_QUEUE=gateway_client_data_queue
+      - QUERY4_ANSWER_QUEUE=query4_answer_queue
+      - AMOUNT_OF_WORKERS=3
+      - WORKER_INDEX=1
+    depends_on:
+      - rabbitmq_server
+      - gateway
+
+  birthday_dictionary_worker_2:
+    build:
+      context: .
+      dockerfile: ./workers/birthday_dictionary/Dockerfile
+    container_name: birthday_dictionary_worker_2
+    environment:
+      - RABBITMQ_HOST=rabbitmq_server
+      - RECEIVER_QUEUE=birthday_dictionary_worker_2_queue
+      - RECEIVER_EXCHANGE=birthday_dictionary_exchange
+      - GATEWAY_REQUEST_QUEUE=birthday_dictionary_client_request_queue
+      - GATEWAY_CLIENT_DATA_QUEUE=gateway_client_data_queue
+      - QUERY4_ANSWER_QUEUE=query4_answer_queue
+      - AMOUNT_OF_WORKERS=3
+      - WORKER_INDEX=2
+    depends_on:
+      - rabbitmq_server
+      - gateway
+
   categorizer_q4_worker_1:
     build:
       context: .
