@@ -6,6 +6,7 @@ COPY common /app/common
 COPY gateway/main.py /app/main.py
 COPY gateway/gateway_protocol.py /app/gateway_protocol.py
 COPY gateway/gateway_protocol.py /app/gateway_protocol.py
+COPY gateway/client_handler.py /app/client_handler.py
 COPY gateway/gateway.py /app/gateway.py
 
 RUN pip install pika

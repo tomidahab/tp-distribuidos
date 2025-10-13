@@ -122,9 +122,9 @@ class Client:
             self.skt.connect((SERVER_HOST, SERVER_PORT))
             logging.info(f"Client {self.client_id} connected to {SERVER_HOST}:{SERVER_PORT}")
             
-            # Send client_id to gateway first thing after connection
-            send_h_str(self.skt, self.client_id)
-            logging.info(f"Sent client_id '{self.client_id}' to gateway")
+            # # Send client_id to gateway first thing after connection
+            # send_h_str(self.skt, self.client_id)
+            # logging.info(f"Sent client_id '{self.client_id}' to gateway")
             
             for data_set_files in data_sets[:-1]:
                 for file in data_set_files[:-1]:
