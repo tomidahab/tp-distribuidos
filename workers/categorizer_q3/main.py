@@ -26,7 +26,7 @@ RECEIVER_EXCHANGE = os.environ.get('RECEIVER_EXCHANGE', 'categorizer_q3_exchange
 FANOUT_EXCHANGE = os.environ.get('FANOUT_EXCHANGE', 'categorizer_q3_fanout_exchange')
 WORKER_INDEX = int(os.environ.get('WORKER_INDEX', '0'))
 GATEWAY_QUEUE = os.environ.get('GATEWAY_QUEUE', 'query3_result_receiver_queue')
-NUMBER_OF_HOUR_WORKERS = int(os.environ.get('NUMBER_OF_HOUR_WORKERS', '3'))
+NUMBER_OF_HOUR_WORKERS = int(os.environ.get('NUMBER_OF_HOUR_WORKERS', '4'))
 
 # Parse assigned semesters from environment variable
 assigned_semesters_str = os.environ.get('ASSIGNED_SEMESTERS', '')
@@ -42,7 +42,7 @@ else:
     # Fallback to hardcoded mapping if environment variable not set
     SEMESTER_MAPPING = {
         0: ['semester.2024-1', 'semester.2024-2'],  # Worker 0: second semesters
-        1: ['semester.2023-2', 'semester.2025-1']   # Worker 1: first semesters
+        1: ['semester.2025-2', 'semester.2025-1']   # Worker 1: first semesters
     }
 
 topic_middleware = None

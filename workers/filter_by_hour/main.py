@@ -30,6 +30,8 @@ end_messages_received = 0
 # Track END messages per client: {client_id: count}
 client_end_messages = defaultdict(int)
 completed_clients = set()
+# Track routing keys used for categorizer_q3 per client
+client_q3_routing_keys = defaultdict(set)
 
 # Track detailed stats per client
 client_stats = defaultdict(lambda: {
@@ -152,7 +154,6 @@ def on_message_callback(message: bytes, filter_by_amount_exchange, categorizer_q
             # For Q3 - group by semester and send to topic exchange
             if filtered_rows:  # Only process if there are rows
                 client_stats[client_id]['rows_sent_to_q3'] += len(filtered_rows)
-                
                 rows_by_semester = defaultdict(list)
                 for row in filtered_rows:
                     dic_fields_row = row_to_dict(row, type_of_message)
@@ -163,16 +164,16 @@ def on_message_callback(message: bytes, filter_by_amount_exchange, categorizer_q
                         month = datetime_obj.month
                         semester_key = get_semester_key(year, month)
                         rows_by_semester[semester_key].append(row)
+                        # Track routing key for END message
+                        client_q3_routing_keys[client_id].add(semester_key)
                     except Exception as e:
                         print(f"[worker] Error parsing date for Q3 routing: {e}", file=sys.stderr)
-                
                 # Send grouped messages by semester
                 for semester_key, semester_rows in rows_by_semester.items():
                     if semester_rows:
                         semester_message, _ = build_message(client_id, type_of_message, 0, semester_rows)
                         categorizer_q3_topic_exchange.send(semester_message, routing_key=semester_key)
                         rows_sent_to_q3 += len(semester_rows)
-                        #print(f"[filter_by_hour] Worker {WORKER_INDEX} client {client_id}: Sent {len(semester_rows)} rows for {semester_key} to categorizer_q3 (total sent to q3: {client_stats[client_id]['rows_sent_to_q3']})")
                 
         #elif type_of_message == CSV_TYPES_REVERSE['transaction_items']:  # transaction_items
             #print(f"[filter_by_hour] Worker {WORKER_INDEX} received a transaction_items message, that should never happen!", flush=True)
@@ -184,11 +185,9 @@ def on_message_callback(message: bytes, filter_by_amount_exchange, categorizer_q
         if client_id not in completed_clients:
             print(f"[filter_by_hour] Worker {WORKER_INDEX} client {client_id} received all END messages from filter_by_year workers. Sending END messages...", flush=True)
             completed_clients.add(client_id)
-            
             # Print summary stats for this client
             stats = client_stats[client_id]
-            print(f"[filter_by_hour] Worker {WORKER_INDEX} SUMMARY for client {client_id}: messages_received={stats['messages_received']}, rows_received={stats['rows_received']}, rows_sent_to_amount={stats['rows_sent_to_amount']}, rows_sent_to_q3={stats['rows_sent_to_q3']}")
-            
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} SUMMARY for client {client_id}: messages_received={stats['messages_received']}, rows_received={stats['rows_received']}, rows_sent_to_amount={stats['rows_sent_to_amount']}, rows_sent_to_q3={stats['rows_sent_to_q3']}" )
             try:
                 # Send END to filter_by_amount (to all workers) for this specific client
                 end_message, _ = build_message(client_id, type_of_message, 1, [])
@@ -196,11 +195,10 @@ def on_message_callback(message: bytes, filter_by_amount_exchange, categorizer_q
                     routing_key = f"transaction.{i}"
                     filter_by_amount_exchange.send(end_message, routing_key=routing_key)
                     print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message for client {client_id} to filter_by_amount worker {i} via topic exchange", flush=True)
-                
-                # Send END to categorizer_q3 via fanout exchange for this specific client
-                end_message, _ = build_message(client_id, type_of_message, 1, [])
-                categorizer_q3_fanout_exchange.send(end_message)
-                print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message for client {client_id} to categorizer_q3 via fanout exchange", flush=True)
+                # Send END to categorizer_q3 topic exchange for all routing keys used for this client
+                for routing_key in client_q3_routing_keys[client_id]:
+                    categorizer_q3_topic_exchange.send(end_message, routing_key=routing_key)
+                    print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message for client {client_id} to categorizer_q3 topic exchange with routing key {routing_key}", flush=True)
             except Exception as e:
                 print(f"[filter_by_hour] Worker {WORKER_INDEX} ERROR sending END message for client {client_id}: {e}", flush=True)
                 import traceback
