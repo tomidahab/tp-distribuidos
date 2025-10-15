@@ -17,41 +17,17 @@ services:
     volumes:
       - ./data/received:/app/data/received
 
-  categorizer_q3_worker_1:
-    build:
-      context: .
-      dockerfile: workers/categorizer_q3/Dockerfile
-    container_name: categorizer_q3_worker_1
-    environment:
-      - RABBITMQ_HOST=rabbitmq_server
-      - RECEIVER_EXCHANGE=categorizer_q3_exchange
-      - FANOUT_EXCHANGE=categorizer_q3_fanout_exchange
-      - WORKER_INDEX=0
-      - GATEWAY_QUEUE=query3_result_receiver_queue
-      - NUMBER_OF_HOUR_WORKERS=4
-      - ASSIGNED_SEMESTERS=semester.2024-1,semester.2024-2
-    depends_on:
-      - rabbitmq_server
-    volumes:
-      - ./data/received:/app/data/received
-
-  categorizer_q3_worker_2:
-    build:
-      context: .
-      dockerfile: workers/categorizer_q3/Dockerfile
-    container_name: categorizer_q3_worker_2
-    environment:
-      - RABBITMQ_HOST=rabbitmq_server
-      - RECEIVER_EXCHANGE=categorizer_q3_exchange
-      - FANOUT_EXCHANGE=categorizer_q3_fanout_exchange
-      - WORKER_INDEX=1
-      - GATEWAY_QUEUE=query3_result_receiver_queue
-      - NUMBER_OF_HOUR_WORKERS=4
-      - ASSIGNED_SEMESTERS=semester.2023-2,semester.2025-1
-    depends_on:
-      - rabbitmq_server
-    volumes:
-      - ./data/received:/app/data/received
+  rabbitmq_server:
+    image: rabbitmq:3-management
+    container_name: rabbitmq_server
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq_server-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
   client_1:
     build:
@@ -76,18 +52,6 @@ services:
       - gateway
     volumes:
       - ./data/input:/data/input
-
-  rabbitmq_server:
-    image: rabbitmq:3-management
-    container_name: rabbitmq_server
-    ports:
-      - "5672:5672"
-      - "15672:15672"
-    healthcheck:
-      test: ["CMD", "rabbitmq_server-diagnostics", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
 
   filter_by_year_worker_0:
     build:
@@ -221,11 +185,11 @@ services:
     depends_on:
       - rabbitmq_server
 
-  filter_by_hour_worker_4:
+  filter_by_hour_worker_3:
     build:
       context: .
       dockerfile: workers/filter_by_hour/Dockerfile
-    container_name: filter_by_hour_worker_4
+    container_name: filter_by_hour_worker_3
     environment:
       - RABBITMQ_HOST=rabbitmq_server
       - RECEIVER_EXCHANGE=filter_by_hour_exchange
@@ -241,11 +205,11 @@ services:
     depends_on:
       - rabbitmq_server
 
-  filter_by_amount_worker_1:
+  filter_by_amount_worker_0:
     build:
       context: .
       dockerfile: workers/filter_by_amount/Dockerfile
-    container_name: filter_by_amount_worker_1
+    container_name: filter_by_amount_worker_0
     environment:
       - RABBITMQ_HOST=rabbitmq_server
       - RECEIVER_EXCHANGE=filter_by_amount_exchange
@@ -256,11 +220,11 @@ services:
     depends_on:
       - rabbitmq_server
 
-  filter_by_amount_worker_2:
+  filter_by_amount_worker_1:
     build:
       context: .
       dockerfile: workers/filter_by_amount/Dockerfile
-    container_name: filter_by_amount_worker_2
+    container_name: filter_by_amount_worker_1
     environment:
       - RABBITMQ_HOST=rabbitmq_server
       - RECEIVER_EXCHANGE=filter_by_amount_exchange
@@ -331,33 +295,41 @@ services:
       - rabbitmq_server
       - gateway
 
-  # categorizer_q3_worker:
-  #   build:
-  #     context: .
-  #     dockerfile: workers/categorizer_q3/Dockerfile
-  #   container_name: categorizer_q3_worker
-  #   environment:
-  #     - RABBITMQ_HOST=rabbitmq_server
-  #     - RECEIVER_QUEUE=store_semester_categorizer_queue
-  #     - GATEWAY_QUEUE=query3_result_receiver_queue
-  #   depends_on:
-  #     - rabbitmq_server
-
-  birthday_dictionary_worker:
+  categorizer_q3_worker_1:
     build:
       context: .
-      dockerfile: ./workers/birthday_dictionary/Dockerfile
-    container_name: birthday_dictionary_worker
+      dockerfile: workers/categorizer_q3/Dockerfile
+    container_name: categorizer_q3_worker_1
     environment:
       - RABBITMQ_HOST=rabbitmq_server
-      - RECEIVER_QUEUE=birthday_dictionary_queue
-      - GATEWAY_REQUEST_QUEUE=birthday_dictionary_client_request_queue
-      - GATEWAY_CLIENT_DATA_QUEUE=gateway_client_data_queue
-      - QUERY4_ANSWER_QUEUE=query4_answer_queue
-      - AMOUNT_OF_WORKERS=3
+      - RECEIVER_EXCHANGE=categorizer_q3_exchange
+      - FANOUT_EXCHANGE=categorizer_q3_fanout_exchange
+      - WORKER_INDEX=0
+      - GATEWAY_QUEUE=query3_result_receiver_queue
+      - NUMBER_OF_HOUR_WORKERS=4
+      - ASSIGNED_SEMESTERS=semester.2024-1,semester.2024-2
     depends_on:
       - rabbitmq_server
-      - gateway
+    volumes:
+      - ./data/received:/app/data/received
+
+  categorizer_q3_worker_2:
+    build:
+      context: .
+      dockerfile: workers/categorizer_q3/Dockerfile
+    container_name: categorizer_q3_worker_2
+    environment:
+      - RABBITMQ_HOST=rabbitmq_server
+      - RECEIVER_EXCHANGE=categorizer_q3_exchange
+      - FANOUT_EXCHANGE=categorizer_q3_fanout_exchange
+      - WORKER_INDEX=1
+      - GATEWAY_QUEUE=query3_result_receiver_queue
+      - NUMBER_OF_HOUR_WORKERS=4
+      - ASSIGNED_SEMESTERS=semester.2023-2,semester.2025-1
+    depends_on:
+      - rabbitmq_server
+    volumes:
+      - ./data/received:/app/data/received
 
   birthday_dictionary_worker_0:
     build:
