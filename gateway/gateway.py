@@ -32,11 +32,6 @@ Q4_DATA_REQUESTS_QUEUE = os.environ.get('Q4_DATA_REQUESTS_QUEUE', 'birthday_dict
 RESULT_Q4_QUEUE = os.environ.get('RESULT_Q4_QUEUE', 'query4_answer_queue') # Modify to match others
 RESULT_Q4_FILE = os.path.join(OUTPUT_DIR, 'result_q4.csv')
 
-QUERY_1_TOTAL_WORKERS = int(os.environ.get('QUERY_1_TOTAL_WORKERS', 3))
-QUERY_2_TOTAL_WORKERS = int(os.environ.get('QUERY_2_TOTAL_WORKERS', 3))
-QUERY_3_TOTAL_WORKERS = int(os.environ.get('QUERY_3_TOTAL_WORKERS', 2))
-QUERY_4_TOTAL_WORKERS = int(os.environ.get('QUERY_4_TOTAL_WORKERS', 3))
-
 QUERIES_TO_COMPLETE = 4
 
 class Gateway:

@@ -8,7 +8,9 @@ services:
     container_name: gateway
     environment:
       - QUERY_1_TOTAL_WORKERS=2
+      - QUERY_2_TOTAL_WORKERS=3
       - QUERY_3_TOTAL_WORKERS=2
+      - QUERY_4_TOTAL_WORKERS1
       - NUMBER_OF_YEAR_WORKERS=3
     ports:
       - "5000:5000"

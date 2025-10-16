@@ -10,7 +10,12 @@ QUERIES_TO_COMPLETE = 4
 
 OUTPUT_DIR = os.path.join("data", "received")
 
-MAX_QUERY_WORKERS = { "q1":2, "q2":3, "q3":2, "q4":1 }
+MAX_QUERY_WORKERS = { 
+    "q1":int(os.environ.get('QUERY_1_TOTAL_WORKERS', 2)), 
+    "q2":int(os.environ.get('QUERY_2_TOTAL_WORKERS', 3)), 
+    "q3":int(os.environ.get('QUERY_3_TOTAL_WORKERS', 2)), 
+    "q4":int(os.environ.get('QUERY_4_TOTAL_WORKERS', 1)) 
+    }
 
 RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq_server')
 
