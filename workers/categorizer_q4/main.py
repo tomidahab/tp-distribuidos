@@ -13,6 +13,7 @@ FANOUT_EXCHANGE = os.environ.get('FANOUT_EXCHANGE', 'categorizer_q4_fanout_excha
 WORKER_INDEX = int(os.environ.get('WORKER_INDEX', 0))
 BIRTHDAY_DICT_QUEUE = os.environ.get('BIRTHDAY_DICT_QUEUE', 'birthday_dictionary_queue')
 AMOUNT_OF_WORKERS = int(os.environ.get('AMOUNT_OF_WORKERS', 1))
+BIRTHDAY_MAPPERS = int(os.environ.get('BIRTHDAY_MAPPERS', 3))
 NUMBER_OF_YEAR_WORKERS = int(os.environ.get('NUMBER_OF_YEAR_WORKERS', '3'))
 
 receiver_queue = None
@@ -115,7 +116,7 @@ def send_client_q4_results(client_id, store_user_counter):
     """Send Q4 results for specific client to birthday_dictionary as a single message"""
     try:
         # Calculate worker_index for this client
-        worker_index = int(client_id.split("_")[1]) % AMOUNT_OF_WORKERS
+        worker_index = int(client_id.split("_")[1]) % BIRTHDAY_MAPPERS
         # Use topic exchange and routing key client.{worker_index}
         birthday_dict_exchange = MessageMiddlewareExchange(
             host=RABBITMQ_HOST,

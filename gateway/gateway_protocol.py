@@ -10,6 +10,7 @@ RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq_server')
 FILTER_BY_YEAR_TRANSACTIONS_EXCHANGE = 'filter_by_year_transactions_exchange'
 FILTER_BY_YEAR_TRANSACTION_ITEMS_EXCHANGE = 'filter_by_year_transaction_items_exchange'
 NUMBER_OF_YEAR_WORKERS = int(os.environ.get('NUMBER_OF_YEAR_WORKERS', '3'))
+NUMBER_OF_BIRTHDAY_MAPPERS = int(os.environ.get('NUMBER_OF_BIRTHDAY_MAPPERS', '3'))
 CATEGORIZER_QUERY2_ITEMS_QUEUE = 'categorizer_q2_items_queue'
 CATEGORIZER_QUERY2_TRANSACTIONS_QUEUE = 'categorizer_q2_receiver_queue'
 CATEGORIZER_Q2_ITEMS_FANOUT_EXCHANGE = 'categorizer_q2_items_fanout_exchange'
@@ -119,7 +120,8 @@ def handle_and_forward_chunk(client_id: str, csv_type: int, is_last: int, chunk:
 
             for attempt in range(MAX_RETRIES):
                 try:
-                    routing_key = f"client.{client_id}"
+                    worker_index = int(client_id.split("_")[1]) % NUMBER_OF_BIRTHDAY_MAPPERS
+                    routing_key = f"birth_dict.{worker_index}"
                     birth_dic_queue_exchange.send(message, routing_key=routing_key)
                     break
                 except Exception as e:

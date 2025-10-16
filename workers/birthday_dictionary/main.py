@@ -6,13 +6,14 @@ import time
 import threading
 from common.protocol import parse_message, build_message
 from common.middleware import MessageMiddlewareQueue, MessageMiddlewareDisconnectedError, MessageMiddlewareMessageError, MessageMiddlewareExchange
+from queue import Queue # Thread safe queue
 
 RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq_server')
 RECEIVER_QUEUE = os.environ.get('RECEIVER_QUEUE', 'birthday_dictionary_queue')
 GATEWAY_REQUEST_QUEUE = os.environ.get('GATEWAY_REQUEST_QUEUE', 'birthday_dictionary_client_request_queue')
 GATEWAY_CLIENT_DATA_QUEUE = os.environ.get('GATEWAY_CLIENT_DATA_QUEUE', 'gateway_client_data_queue')
 QUERY4_ANSWER_QUEUE = os.environ.get('QUERY4_ANSWER_QUEUE', 'query4_answer_queue')
-CATEGORIZER_Q4_WORKERS = int(os.environ.get('AMOUNT_OF_WORKERS', 3))
+CATEGORIZER_Q4_WORKERS = int(os.environ.get('CATEGORIZER_Q4_WORKERS', 3))
 WORKER_INDEX = int(os.environ.get('WORKER_INDEX', 0))
 AMOUNT_OF_WORKERS = int(os.environ.get('AMOUNT_OF_WORKERS', 1))
 RECEIVER_EXCHANGE = os.environ.get('RECEIVER_EXCHANGE', 'birthday_dictionary_exchange')
@@ -21,6 +22,37 @@ receiver_queue = None
 gateway_request_queue = None
 gateway_client_data_queue = None
 query4_answer_queue = None
+
+clients_lock = threading.RLock()
+clients = {}
+death_clients = []
+
+class BirthClientHandler(threading.Thread):
+    def __init__(self, client_id, user_ids, message):
+        super().__init__(daemon=True)
+        self.client_id = client_id
+        self.data_queue = Queue()
+        self.user_ids = user_ids
+        self.message = message
+
+    def run(self):
+        request_client_data_for_client(self.client_id)
+
+        client_birthdays = {}
+
+        is_last = False
+        while not is_last:
+            parsed_message = self.data_queue.get()
+            for row in parsed_message['rows']:
+                parts = row.split(',')
+                if len(parts) == 2:
+                    client_id, birthday = parts
+                    if client_id in self.user_ids:
+                        client_birthdays[client_id] = birthday
+            is_last = parsed_message['is_last']
+        
+        enriched_message = append_birthdays_to_message(self.message, client_birthdays)
+        send_enriched_message_to_gateway(enriched_message)
 
 def _close_queue(queue):
     if queue:
@@ -48,6 +80,16 @@ def listen_for_top_users():
     threads_started = set()
 
     def on_message_callback(message: bytes):
+
+        # Before proceed with the message, clean up death clients 
+        with clients_lock:
+            for death_client in death_clients:
+                clients[death_client].join()
+                del clients[death_client]
+                threads_started.remove(death_client)
+            death_clients.clear()
+
+        # Process the message
         parsed_message = parse_message(message)
         client_id = parsed_message['client_id']
         top_users = []
@@ -68,12 +110,9 @@ def listen_for_top_users():
         if message_count_by_client[client_id] == CATEGORIZER_Q4_WORKERS and client_id not in threads_started:
             print(f"[birthday_dictionary] Top users: {messages_by_client[client_id]}")
             threads_started.add(client_id)
-            thread = threading.Thread(
-                target=listen_and_process_client_data,
-                args=(client_id, user_ids_by_client[client_id], messages_by_client[client_id]),
-                daemon=True
-            )
-            thread.start()
+            with clients_lock:
+                clients[client_id] = BirthClientHandler(client_id, user_ids_by_client[client_id], messages_by_client[client_id])
+                clients[client_id].start()
 
     try:
         receiver_queue.start_consuming(on_message_callback)
@@ -84,64 +123,6 @@ def listen_for_top_users():
     finally:
         receiver_queue.close()
 
-def listen_and_process_client_data(client_id, user_ids, message):
-    client_birthdays = listen_for_client_data(client_id, user_ids)
-    enriched_message = append_birthdays_to_message(message, client_birthdays)
-    send_enriched_message_to_gateway(enriched_message)
-
-def listen_for_client_data(target_client_id, user_ids):
-    client_birthdays = {}
-    global gateway_client_data_queue
-
-    queue_name = f"{GATEWAY_CLIENT_DATA_QUEUE}_WORKER_{WORKER_INDEX}" # Queue per worker
-
-    gateway_client_data_queue = MessageMiddlewareExchange(
-        host=RABBITMQ_HOST,
-        exchange_name="birth_queue_users_exchange",
-        exchange_type='topic',
-        queue_name=queue_name,
-        routing_keys=[f"client.{target_client_id}"]
-    )
-    print(f"[birthday_dictionary] Listening for client data on queue: {queue_name} with routing key: client.{target_client_id}")
-
-    # Once the exchange is created, request the data
-    request_client_data_for_client(target_client_id)
-
-    def on_message_callback(message: bytes):
-        parsed_message = parse_message(message)
-        for row in parsed_message['rows']:
-            parts = row.split(',')
-            if len(parts) == 2:
-                client_id, birthday = parts
-                if client_id in user_ids:
-                    client_birthdays[client_id] = birthday
-        if parsed_message['is_last']:
-            print(f"[birthday_dictionary] Received end message for {target_client_id} vs {parsed_message['client_id']}, stopping client data collection.")
-            gateway_client_data_queue.stop_consuming()
-
-    try:
-        gateway_client_data_queue.start_consuming(on_message_callback)
-    except MessageMiddlewareDisconnectedError:
-        print("[birthday_dictionary] Disconnected from middleware.", file=sys.stderr)
-    except MessageMiddlewareMessageError:
-        print("[birthday_dictionary] Message error in middleware.", file=sys.stderr)
-    finally:
-        gateway_client_data_queue.close()
-    return client_birthdays
-
-def append_birthdays_to_messages(messages, client_birthdays):
-    enriched_messages = []
-    for msg in messages:
-        enriched_top_users = []
-        for user in msg.get('top_users', []):
-            user_id = user['user_id']
-            user_with_birthday = dict(user)
-            user_with_birthday['birthday'] = client_birthdays.get(user_id)
-            enriched_top_users.append(user_with_birthday)
-        enriched_msg = dict(msg)
-        enriched_msg['top_users'] = enriched_top_users
-        enriched_messages.append(enriched_msg)
-    return enriched_messages
 
 def append_birthdays_to_message(message, client_birthdays):
     enriched_top_users = []
@@ -179,10 +160,55 @@ def request_client_data_for_client(client_id):
     queue.send(message)
     queue.close()
 
+def listen_for_users_data():
+    global gateway_client_data_queue
+
+    queue_name = f"{GATEWAY_CLIENT_DATA_QUEUE}_WORKER_{WORKER_INDEX}" # Queue per worker
+
+    gateway_client_data_queue = MessageMiddlewareExchange(
+        host=RABBITMQ_HOST,
+        exchange_name="birth_queue_users_exchange",
+        exchange_type='topic',
+        queue_name=queue_name,
+        routing_keys=[f"birth_dict.{WORKER_INDEX}"]
+    )
+    print(f"[birthday_dictionary] Listening for client data on queue: {queue_name} with routing key: birth_dict.{WORKER_INDEX}")
+
+    def on_message_callback(message: bytes):
+        parsed_message = parse_message(message)
+
+        with clients_lock:
+            print(f"DATA RECEIVED: {parsed_message['client_id']} while clients: {list(clients.keys())}", flush=True)
+            
+            if(parsed_message['client_id'] not in clients):
+                print(f"{parsed_message['client_id']} not in clients: {list(clients.keys())}", flush=True)
+                
+
+            clients[parsed_message['client_id']].data_queue.put(parsed_message)
+            if parsed_message['is_last']:
+                death_clients.append(parsed_message['client_id']) # register for cleanning
+
+    try:
+        gateway_client_data_queue.start_consuming(on_message_callback)
+    except MessageMiddlewareDisconnectedError:
+        print("[birthday_dictionary] Disconnected from middleware.", file=sys.stderr)
+    except MessageMiddlewareMessageError:
+        print("[birthday_dictionary] Message error in middleware.", file=sys.stderr)
+    finally:
+        gateway_client_data_queue.close()
+
 def main():
     signal.signal(signal.SIGTERM, _sigterm_handler)
     signal.signal(signal.SIGINT, _sigterm_handler)
     time.sleep(30)
+
+    users_data_listener_t = threading.Thread(
+        target=listen_for_users_data,
+        args=(),
+        daemon=True
+    )
+    users_data_listener_t.start()
+
     listen_for_top_users()
     print("[birthday_dictionary] Worker completed successfully.")
 

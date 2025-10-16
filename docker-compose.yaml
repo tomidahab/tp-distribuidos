@@ -10,7 +10,7 @@ services:
       - QUERY_1_TOTAL_WORKERS=2
       - QUERY_2_TOTAL_WORKERS=3
       - QUERY_3_TOTAL_WORKERS=2
-      - QUERY_4_TOTAL_WORKERS1
+      - QUERY_4_TOTAL_WORKERS=1
       - NUMBER_OF_YEAR_WORKERS=3
     ports:
       - "5000:5000"
@@ -50,6 +50,102 @@ services:
     container_name: client_2
     environment:
       - CLIENT_ID=client_2
+    depends_on:
+      - gateway
+    volumes:
+      - ./data/input:/data/input
+
+  client_3:
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+    container_name: client_3
+    environment:
+      - CLIENT_ID=client_3
+    depends_on:
+      - gateway
+    volumes:
+      - ./data/input:/data/input
+
+  client_4:
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+    container_name: client_4
+    environment:
+      - CLIENT_ID=client_4
+    depends_on:
+      - gateway
+    volumes:
+      - ./data/input:/data/input
+
+  client_5:
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+    container_name: client_5
+    environment:
+      - CLIENT_ID=client_5
+    depends_on:
+      - gateway
+    volumes:
+      - ./data/input:/data/input
+
+  client_6:
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+    container_name: client_6
+    environment:
+      - CLIENT_ID=client_6
+    depends_on:
+      - gateway
+    volumes:
+      - ./data/input:/data/input
+
+  client_7:
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+    container_name: client_7
+    environment:
+      - CLIENT_ID=client_7
+    depends_on:
+      - gateway
+    volumes:
+      - ./data/input:/data/input
+
+  client_8:
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+    container_name: client_8
+    environment:
+      - CLIENT_ID=client_8
+    depends_on:
+      - gateway
+    volumes:
+      - ./data/input:/data/input
+
+  client_9:
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+    container_name: client_9
+    environment:
+      - CLIENT_ID=client_9
+    depends_on:
+      - gateway
+    volumes:
+      - ./data/input:/data/input
+
+  client_10:
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+    container_name: client_10
+    environment:
+      - CLIENT_ID=client_10
     depends_on:
       - gateway
     volumes:

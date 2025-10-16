@@ -75,7 +75,7 @@ class ClientHandler(threading.Thread):
         # Write message to result file (append mode)
         rows = parsed_message['rows']
         client_id = self.client_id
-        logging.info(f"[{query}][{self.client_id}] Parsed message: client_id={client_id}, csv_type={parsed_message.get('csv_type')}, is_last={parsed_message.get('is_last')}, rows={len(rows)}")
+        # logging.info(f"[{query}][{self.client_id}] Parsed message: client_id={client_id}, csv_type={parsed_message.get('csv_type')}, is_last={parsed_message.get('is_last')}, rows={len(rows)}")
         
         self.save_temp_results(self.query_path(query), rows)
 

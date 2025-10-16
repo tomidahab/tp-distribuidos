@@ -1,6 +1,6 @@
 FILENAME = "docker-compose.yaml"
 
-CLIENTS = 2
+CLIENTS = 10
 YEAR_FILTERS = 3
 HOUR_FILTERS = 4
 AMOUNT_FILTERS = 2
@@ -33,8 +33,9 @@ def generate_compose_file():
         wln(3, f"- QUERY_1_TOTAL_WORKERS={AMOUNT_FILTERS}")
         wln(3, f"- QUERY_2_TOTAL_WORKERS={Q2_CATEGORIZERS}")
         wln(3, f"- QUERY_3_TOTAL_WORKERS={Q3_CATEGORIZERS}")
-        wln(3, f"- QUERY_4_TOTAL_WORKERS{1}")
+        wln(3, f"- QUERY_4_TOTAL_WORKERS={1}")
         wln(3, f"- NUMBER_OF_YEAR_WORKERS={YEAR_FILTERS}")
+        wln(3, f"- NUMBER_OF_BIRTHDAY_MAPPERS={BIRTHDAY_MAPPERS}")
         wln(2, "ports:")
         wln(3, '- "5000:5000"')
         wln(2, "depends_on:")
@@ -219,6 +220,7 @@ def generate_compose_file():
             wln(3, "- GATEWAY_CLIENT_DATA_QUEUE=gateway_client_data_queue")
             wln(3, "- QUERY4_ANSWER_QUEUE=query4_answer_queue")
             wln(3, f"- AMOUNT_OF_WORKERS={BIRTHDAY_MAPPERS}")
+            wln(3, f"- CATEGORIZER_Q4_WORKERS={Q4_CATEGORIZERS}")
             wln(3, f"- WORKER_INDEX={i}")
             wln(2, "depends_on:")
             wln(3, "- rabbitmq_server")
@@ -241,6 +243,7 @@ def generate_compose_file():
             wln(3, "- FANOUT_EXCHANGE=categorizer_q4_fanout_exchange")
             wln(3, f"- WORKER_INDEX={i}")
             wln(3, f"- AMOUNT_OF_WORKERS={Q4_CATEGORIZERS}")
+            wln(3, f"- BIRTHDAY_MAPPERS={BIRTHDAY_MAPPERS}")
             wln(3, "- BIRTHDAY_DICT_QUEUE=birthday_dictionary_queue")
             wln(3, f"- NUMBER_OF_YEAR_WORKERS={YEAR_FILTERS}")
             wln(2, "depends_on:")

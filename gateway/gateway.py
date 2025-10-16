@@ -69,6 +69,7 @@ class Gateway:
                 # Parse message to get client_id
                 parsed_msg = parse_message(message)
                 client_id = parsed_msg.get('client_id', 'unknown')
+                logging.info(f'Get a USERS DATA Request for {client_id}')
                 
                 with self.clients_lock:
                     self.clients[client_id].handle_q4_data_request()
