@@ -10,7 +10,6 @@ RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq_server')
 FILTER_BY_YEAR_TRANSACTIONS_EXCHANGE = 'filter_by_year_transactions_exchange'
 FILTER_BY_YEAR_TRANSACTION_ITEMS_EXCHANGE = 'filter_by_year_transaction_items_exchange'
 NUMBER_OF_YEAR_WORKERS = int(os.environ.get('NUMBER_OF_YEAR_WORKERS', '3'))
-NUMBER_OF_YEAR_WORKERS = 3
 CATEGORIZER_QUERY2_ITEMS_QUEUE = 'categorizer_q2_items_queue'
 CATEGORIZER_QUERY2_TRANSACTIONS_QUEUE = 'categorizer_q2_receiver_queue'
 CATEGORIZER_Q2_ITEMS_FANOUT_EXCHANGE = 'categorizer_q2_items_fanout_exchange'
