@@ -1,13 +1,21 @@
 FILENAME = "docker-compose.yaml"
 
-CLIENTS = 10
+CLIENTS = 3
 YEAR_FILTERS = 3
 HOUR_FILTERS = 4
 AMOUNT_FILTERS = 2
 Q2_CATEGORIZERS = 3
-Q3_CATEGORIZERS = 2
+Q3_CATEGORIZERS = 2 # NOTE: This will always be <= Q3_SEMESTERS Count
 Q4_CATEGORIZERS = 3
 BIRTHDAY_MAPPERS = 3
+
+Q3_SEMESTERS = [
+    "semester.2024-1",
+    # "semester.2024-2",
+    # "semester.2023-2",
+    "semester.2025-1",
+]
+TARGET_Q3_CATEGORIZERS = min(len(Q3_SEMESTERS), Q3_CATEGORIZERS)
 
 TAB = "  "
 
@@ -32,7 +40,7 @@ def generate_compose_file():
         wln(2, "environment:")
         wln(3, f"- QUERY_1_TOTAL_WORKERS={AMOUNT_FILTERS}")
         wln(3, f"- QUERY_2_TOTAL_WORKERS={Q2_CATEGORIZERS}")
-        wln(3, f"- QUERY_3_TOTAL_WORKERS={Q3_CATEGORIZERS}")
+        wln(3, f"- QUERY_3_TOTAL_WORKERS={TARGET_Q3_CATEGORIZERS}")
         wln(3, f"- QUERY_4_TOTAL_WORKERS={1}")
         wln(3, f"- NUMBER_OF_YEAR_WORKERS={YEAR_FILTERS}")
         wln(3, f"- NUMBER_OF_BIRTHDAY_MAPPERS={BIRTHDAY_MAPPERS}")
@@ -179,11 +187,7 @@ def generate_compose_file():
         # ====================
         # Categorizer Q3
         # ====================
-        semesters = [
-            "semester.2024-1,semester.2024-2",
-            "semester.2023-2,semester.2025-1",
-        ]
-        for i in range(Q3_CATEGORIZERS):
+        for i in range(TARGET_Q3_CATEGORIZERS):
             wln(1, f"categorizer_q3_worker_{i + 1}:")
             wln(2, "build:")
             wln(3, "context: .")
@@ -196,7 +200,8 @@ def generate_compose_file():
             wln(3, f"- WORKER_INDEX={i}")
             wln(3, "- GATEWAY_QUEUE=query3_result_receiver_queue")
             wln(3, f"- NUMBER_OF_HOUR_WORKERS={HOUR_FILTERS}")
-            wln(3, f"- ASSIGNED_SEMESTERS={semesters[i % len(semesters)]}")
+            assigned_semesters = ",".join(semester for s_i, semester in enumerate(Q3_SEMESTERS) if s_i % TARGET_Q3_CATEGORIZERS == i)
+            wln(3, f"- ASSIGNED_SEMESTERS={assigned_semesters}")
             wln(2, "depends_on:")
             wln(3, "- rabbitmq_server")
             wln(2, "volumes:")

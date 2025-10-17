@@ -12,6 +12,7 @@ services:
       - QUERY_3_TOTAL_WORKERS=2
       - QUERY_4_TOTAL_WORKERS=1
       - NUMBER_OF_YEAR_WORKERS=3
+      - NUMBER_OF_BIRTHDAY_MAPPERS=3
     ports:
       - "5000:5000"
     depends_on:
@@ -62,90 +63,6 @@ services:
     container_name: client_3
     environment:
       - CLIENT_ID=client_3
-    depends_on:
-      - gateway
-    volumes:
-      - ./data/input:/data/input
-
-  client_4:
-    build:
-      context: .
-      dockerfile: client/Dockerfile
-    container_name: client_4
-    environment:
-      - CLIENT_ID=client_4
-    depends_on:
-      - gateway
-    volumes:
-      - ./data/input:/data/input
-
-  client_5:
-    build:
-      context: .
-      dockerfile: client/Dockerfile
-    container_name: client_5
-    environment:
-      - CLIENT_ID=client_5
-    depends_on:
-      - gateway
-    volumes:
-      - ./data/input:/data/input
-
-  client_6:
-    build:
-      context: .
-      dockerfile: client/Dockerfile
-    container_name: client_6
-    environment:
-      - CLIENT_ID=client_6
-    depends_on:
-      - gateway
-    volumes:
-      - ./data/input:/data/input
-
-  client_7:
-    build:
-      context: .
-      dockerfile: client/Dockerfile
-    container_name: client_7
-    environment:
-      - CLIENT_ID=client_7
-    depends_on:
-      - gateway
-    volumes:
-      - ./data/input:/data/input
-
-  client_8:
-    build:
-      context: .
-      dockerfile: client/Dockerfile
-    container_name: client_8
-    environment:
-      - CLIENT_ID=client_8
-    depends_on:
-      - gateway
-    volumes:
-      - ./data/input:/data/input
-
-  client_9:
-    build:
-      context: .
-      dockerfile: client/Dockerfile
-    container_name: client_9
-    environment:
-      - CLIENT_ID=client_9
-    depends_on:
-      - gateway
-    volumes:
-      - ./data/input:/data/input
-
-  client_10:
-    build:
-      context: .
-      dockerfile: client/Dockerfile
-    container_name: client_10
-    environment:
-      - CLIENT_ID=client_10
     depends_on:
       - gateway
     volumes:
@@ -405,7 +322,7 @@ services:
       - WORKER_INDEX=0
       - GATEWAY_QUEUE=query3_result_receiver_queue
       - NUMBER_OF_HOUR_WORKERS=4
-      - ASSIGNED_SEMESTERS=semester.2024-1,semester.2024-2
+      - ASSIGNED_SEMESTERS=semester.2024-1
     depends_on:
       - rabbitmq_server
     volumes:
@@ -423,7 +340,7 @@ services:
       - WORKER_INDEX=1
       - GATEWAY_QUEUE=query3_result_receiver_queue
       - NUMBER_OF_HOUR_WORKERS=4
-      - ASSIGNED_SEMESTERS=semester.2023-2,semester.2025-1
+      - ASSIGNED_SEMESTERS=semester.2025-1
     depends_on:
       - rabbitmq_server
     volumes:
@@ -442,6 +359,7 @@ services:
       - GATEWAY_CLIENT_DATA_QUEUE=gateway_client_data_queue
       - QUERY4_ANSWER_QUEUE=query4_answer_queue
       - AMOUNT_OF_WORKERS=3
+      - CATEGORIZER_Q4_WORKERS=3
       - WORKER_INDEX=0
     depends_on:
       - rabbitmq_server
@@ -460,6 +378,7 @@ services:
       - GATEWAY_CLIENT_DATA_QUEUE=gateway_client_data_queue
       - QUERY4_ANSWER_QUEUE=query4_answer_queue
       - AMOUNT_OF_WORKERS=3
+      - CATEGORIZER_Q4_WORKERS=3
       - WORKER_INDEX=1
     depends_on:
       - rabbitmq_server
@@ -478,6 +397,7 @@ services:
       - GATEWAY_CLIENT_DATA_QUEUE=gateway_client_data_queue
       - QUERY4_ANSWER_QUEUE=query4_answer_queue
       - AMOUNT_OF_WORKERS=3
+      - CATEGORIZER_Q4_WORKERS=3
       - WORKER_INDEX=2
     depends_on:
       - rabbitmq_server
@@ -495,6 +415,7 @@ services:
       - FANOUT_EXCHANGE=categorizer_q4_fanout_exchange
       - WORKER_INDEX=0
       - AMOUNT_OF_WORKERS=3
+      - BIRTHDAY_MAPPERS=3
       - BIRTHDAY_DICT_QUEUE=birthday_dictionary_queue
       - NUMBER_OF_YEAR_WORKERS=3
     depends_on:
@@ -513,6 +434,7 @@ services:
       - FANOUT_EXCHANGE=categorizer_q4_fanout_exchange
       - WORKER_INDEX=1
       - AMOUNT_OF_WORKERS=3
+      - BIRTHDAY_MAPPERS=3
       - BIRTHDAY_DICT_QUEUE=birthday_dictionary_queue
       - NUMBER_OF_YEAR_WORKERS=3
     depends_on:
@@ -531,6 +453,7 @@ services:
       - FANOUT_EXCHANGE=categorizer_q4_fanout_exchange
       - WORKER_INDEX=2
       - AMOUNT_OF_WORKERS=3
+      - BIRTHDAY_MAPPERS=3
       - BIRTHDAY_DICT_QUEUE=birthday_dictionary_queue
       - NUMBER_OF_YEAR_WORKERS=3
     depends_on:
