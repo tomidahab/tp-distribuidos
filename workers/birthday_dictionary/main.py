@@ -178,7 +178,7 @@ def listen_for_users_data():
         parsed_message = parse_message(message)
 
         with clients_lock:
-            print(f"DATA RECEIVED: {parsed_message['client_id']} while clients: {list(clients.keys())}", flush=True)
+            # print(f"DATA RECEIVED: {parsed_message['client_id']} while clients: {list(clients.keys())}", flush=True)
             
             if(parsed_message['client_id'] not in clients):
                 print(f"{parsed_message['client_id']} not in clients: {list(clients.keys())}", flush=True)

@@ -1,7 +1,8 @@
+import heapq
 import os
 import signal
 import sys
-from collections import defaultdict, Counter
+from collections import defaultdict
 import time
 from common.protocol import build_message, parse_message, row_to_dict
 from common.middleware import MessageMiddlewareExchange, MessageMiddlewareDisconnectedError, MessageMiddlewareMessageError, MessageMiddlewareQueue
@@ -27,9 +28,17 @@ def _sigterm_handler(signum, _):
     _close_queue(receiver_queue)
     _close_queue(birthday_dict_queue)
 
+def get_top_users(users_counter, n=3):
+    items = users_counter.items()
+    return heapq.nlargest(
+        n,
+        items,
+        key=lambda x: (x[1], x[0]) # Top by count, then by id
+    )
+
 def listen_for_transactions():
     # Per-client store-user tracking: {client_id: {store_id: Counter(user_id: count)}}
-    client_store_user_counter = defaultdict(lambda: defaultdict(Counter))
+    client_store_user_counter = defaultdict(lambda: defaultdict(lambda: defaultdict(int)))
     # Track END messages per client: {client_id: count}
     client_end_messages = defaultdict(int)
     completed_clients = set()
@@ -109,7 +118,7 @@ def get_top_users_per_store(store_user_counter, top_n=3):
     # Returns {store_id: [(user_id, purchase_count), ...]}
     top_users = {}
     for store_id, user_counter in store_user_counter.items():
-        top_users[store_id] = user_counter.most_common(top_n)
+        top_users[store_id] = get_top_users(user_counter)
     return top_users
 
 def send_client_q4_results(client_id, store_user_counter):

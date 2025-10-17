@@ -68,6 +68,30 @@ services:
     volumes:
       - ./data/input:/data/input
 
+  client_4:
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+    container_name: client_4
+    environment:
+      - CLIENT_ID=client_4
+    depends_on:
+      - gateway
+    volumes:
+      - ./data/input:/data/input
+
+  client_5:
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+    container_name: client_5
+    environment:
+      - CLIENT_ID=client_5
+    depends_on:
+      - gateway
+    volumes:
+      - ./data/input:/data/input
+
   filter_by_year_worker_0:
     build:
       context: .
