@@ -56,42 +56,6 @@ services:
     volumes:
       - ./data/input:/data/input
 
-  client_3:
-    build:
-      context: .
-      dockerfile: client/Dockerfile
-    container_name: client_3
-    environment:
-      - CLIENT_ID=client_3
-    depends_on:
-      - gateway
-    volumes:
-      - ./data/input:/data/input
-
-  client_4:
-    build:
-      context: .
-      dockerfile: client/Dockerfile
-    container_name: client_4
-    environment:
-      - CLIENT_ID=client_4
-    depends_on:
-      - gateway
-    volumes:
-      - ./data/input:/data/input
-
-  client_5:
-    build:
-      context: .
-      dockerfile: client/Dockerfile
-    container_name: client_5
-    environment:
-      - CLIENT_ID=client_5
-    depends_on:
-      - gateway
-    volumes:
-      - ./data/input:/data/input
-
   filter_by_year_worker_0:
     build:
       context: .
@@ -181,6 +145,7 @@ services:
       - NUMBER_OF_AMOUNT_WORKERS=2
       - NUMBER_OF_HOUR_WORKERS=4
       - NUMBER_OF_YEAR_WORKERS=3
+      - ACK_QUEUE_PREFIX=filter_by_amount_ack_queue
     depends_on:
       - rabbitmq_server
 
@@ -201,6 +166,7 @@ services:
       - NUMBER_OF_AMOUNT_WORKERS=2
       - NUMBER_OF_HOUR_WORKERS=4
       - NUMBER_OF_YEAR_WORKERS=3
+      - ACK_QUEUE_PREFIX=filter_by_amount_ack_queue
     depends_on:
       - rabbitmq_server
 
@@ -221,6 +187,7 @@ services:
       - NUMBER_OF_AMOUNT_WORKERS=2
       - NUMBER_OF_HOUR_WORKERS=4
       - NUMBER_OF_YEAR_WORKERS=3
+      - ACK_QUEUE_PREFIX=filter_by_amount_ack_queue
     depends_on:
       - rabbitmq_server
 
@@ -241,6 +208,7 @@ services:
       - NUMBER_OF_AMOUNT_WORKERS=2
       - NUMBER_OF_HOUR_WORKERS=4
       - NUMBER_OF_YEAR_WORKERS=3
+      - ACK_QUEUE_PREFIX=filter_by_amount_ack_queue
     depends_on:
       - rabbitmq_server
 
@@ -256,6 +224,7 @@ services:
       - MIN_AMOUNT=75.0
       - RESULT_QUEUE=query1_result_receiver_queue
       - NUMBER_OF_HOUR_WORKERS=4
+      - ACK_QUEUE_PREFIX=filter_by_amount_ack_queue
     depends_on:
       - rabbitmq_server
 
@@ -271,6 +240,7 @@ services:
       - MIN_AMOUNT=75.0
       - RESULT_QUEUE=query1_result_receiver_queue
       - NUMBER_OF_HOUR_WORKERS=4
+      - ACK_QUEUE_PREFIX=filter_by_amount_ack_queue
     depends_on:
       - rabbitmq_server
 

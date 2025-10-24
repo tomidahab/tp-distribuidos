@@ -13,6 +13,8 @@ WORKER_INDEX = int(os.environ.get('WORKER_INDEX', '0'))
 MIN_AMOUNT = float(os.environ.get('MIN_AMOUNT', 15.0))
 RESULT_QUEUE = os.environ.get('RESULT_QUEUE', 'query1_result_receiver_queue')
 NUMBER_OF_HOUR_WORKERS = int(os.environ.get('NUMBER_OF_HOUR_WORKERS', '3'))
+# ACK queue prefix for resilience - will send to sender-specific queues
+ACK_QUEUE_PREFIX = os.environ.get('ACK_QUEUE_PREFIX', 'filter_by_amount_ack_queue')
 
 # Global counters for debugging
 rows_received = 0
@@ -31,47 +33,18 @@ client_stats = defaultdict(lambda: {
 
 queue_result = None
 topic_middleware = None
-# ACK queues for sending acknowledgments  
-ack_queues = {}  # {queue_name: MessageMiddlewareQueue}
+ack_queues = {}
 
 def _close_queue(queue):
     if queue:
         queue.close()
 
-def cleanup_ack_queues():
-    """Clean up all ACK queues"""
-    for queue_name, queue in ack_queues.items():
-        print(f"[filter_by_amount] Worker {WORKER_INDEX} cleaning up ACK queue: {queue_name}", flush=True)
-        _close_queue(queue)
-    ack_queues.clear()
-
 def _sigterm_handler(signum, _):
     _close_queue(queue_result)
     _close_queue(topic_middleware)
-    cleanup_ack_queues()
-    cleanup_ack_queues()
-
-def create_ack_queue(sender_id):
-    """Create or get ACK queue for sending acknowledgments to specific sender"""
-    ack_queue_name = f"ack_{sender_id}"
-    if ack_queue_name not in ack_queues:
-        print(f"[filter_by_amount] Worker {WORKER_INDEX} creating ACK queue: {ack_queue_name} for sender: {sender_id}", flush=True)
-        try:
-            ack_queue = MessageMiddlewareQueue(RABBITMQ_HOST, ack_queue_name)
-            ack_queues[ack_queue_name] = ack_queue
-            print(f"[filter_by_amount] Worker {WORKER_INDEX} successfully created ACK queue: {ack_queue_name}", flush=True)
-            return ack_queue
-        except Exception as e:
-            print(f"[filter_by_amount] Worker {WORKER_INDEX} ERROR creating ACK queue {ack_queue_name}: {e}", flush=True)
-            return None
-    else:
-        print(f"[filter_by_amount] Worker {WORKER_INDEX} using existing ACK queue: {ack_queue_name}", flush=True)
-        return ack_queues[ack_queue_name]
-
-def send_ack(sender_id, message_id):
-    """Send ACK message back to sender - optimized for speed"""
-    # Skip ACK sending for speed
-    return True
+    # Close all ack queues
+    for ack_q in ack_queues.values():
+        _close_queue(ack_q)
 
 def filter_message_by_amount(parsed_message, min_amount: float) -> list:
     try:
@@ -102,11 +75,6 @@ def on_message_callback(message: bytes, topic_middleware, should_stop):
     client_id = parsed_message['client_id']
     is_last = parsed_message['is_last']
     sender = parsed_message.get('sender')  # Optional field
-    message_id = parsed_message.get('message_id')  # Optional field for ACK
-    
-    # Send ACK if needed (simplified)
-    if sender and message_id:
-        send_ack(sender, message_id)
     
     # Update client stats
     client_stats[client_id]['messages_received'] += 1
@@ -155,6 +123,29 @@ def on_message_callback(message: bytes, topic_middleware, should_stop):
         
         # Count outgoing rows
         rows_sent += len(filtered_rows)
+        #print(f"[filter_by_amount] Worker {WORKER_INDEX} sent {len(filtered_rows)} filtered rows for client {client_id}, final_is_last={final_is_last} (total sent: {client_stats[client_id]['rows_sent']})", flush=True)
+        
+        # Send ACK with row count for fault tolerance (if sender specified)
+        if sender:
+            global ack_queues
+            # Get or create ACK queue for this sender
+            if sender not in ack_queues:
+                # Extract worker index from sender (e.g., "filter_by_hour_1" -> "1")
+                try:
+                    sender_worker_idx = sender.split('_')[-1]
+                    ack_queue_name = f"{ACK_QUEUE_PREFIX}_{sender_worker_idx}"
+                    ack_queues[sender] = MessageMiddlewareQueue(RABBITMQ_HOST, ack_queue_name)
+                    print(f"[filter_by_amount] Worker {WORKER_INDEX} created ACK queue connection to {ack_queue_name}", flush=True)
+                except Exception as e:
+                    print(f"[filter_by_amount] Worker {WORKER_INDEX} ERROR creating ACK queue for sender {sender}: {e}", flush=True)
+                    ack_queues[sender] = None
+            
+            if ack_queues[sender] is not None:
+                ack_message = f"ACK{len(filtered_rows)}"
+                ack_queues[sender].send_message(ack_message)
+                print(f"[filter_by_amount] Worker {WORKER_INDEX} sent ACK for client {client_id} to {sender}: {ack_message}", flush=True)
+        else:
+            print(f"[filter_by_amount] Worker {WORKER_INDEX} no sender specified, skipping ACK for client {client_id}", flush=True)
         
         # Mark client as completed and print summary AFTER sending final message
         if final_is_last == 1:
@@ -193,7 +184,9 @@ def main():
         routing_keys=[f'transaction.{WORKER_INDEX}']  # Each worker listens to specific routing key
     )
     
-    # ACK functionality temporarily disabled
+    # Create ACK queues dict for fault tolerance - will connect to sender-specific queues
+    global ack_queues
+    ack_queues = {}  # Will be populated dynamically when we receive messages
     
     # Create result queue
     # queue_result = MessageMiddlewareQueue(RABBITMQ_HOST, RESULT_QUEUE)
@@ -226,7 +219,14 @@ def main():
             topic_middleware.close()
         except Exception as e:
             print(f"[filter_by_amount] Worker {WORKER_INDEX} error closing topic middleware: {e}", file=sys.stderr)
-        # ACK cleanup disabled
+        try:
+            # Close all ACK queues
+            for sender_name, ack_q in ack_queues.items():
+                if ack_q:
+                    ack_q.close()
+                    print(f"[filter_by_amount] Worker {WORKER_INDEX} closed ACK queue for {sender_name}")
+        except Exception as e:
+            print(f"[filter_by_amount] Worker {WORKER_INDEX} error closing ACK queues: {e}", file=sys.stderr)
         # try:
         #     queue_result.close()
         # except Exception as e:

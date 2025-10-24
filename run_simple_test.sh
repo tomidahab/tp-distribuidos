@@ -21,7 +21,7 @@ echo "🐳 Iniciando servicios..."
 docker compose up --build -d
 
 echo "⏰ Esperando a que terminen los servicios..."
-sleep 300
+sleep 150
 
 # Ejecutar comparación
 echo "📊 Ejecutando comparación CSV..."

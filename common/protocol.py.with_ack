@@ -51,16 +51,13 @@ def unpack_response_message(message: bytes) -> Tuple[int, str]:
     response = payload.decode("utf-8")
     return response_type, response
 
-def build_message(client_id, csv_type: int, is_last: int, rows: List[str], sender: str = None, message_id: str = None) -> Tuple[bytes, int]:
+def build_message(client_id, csv_type: int, is_last: int, rows: List[str], sender: str = None) -> Tuple[bytes, int]:
     """
     Arma un mensaje binario con el protocolo definido.
     
-    Formato: 2 bytes client_id_len + client_id + 1 byte csv_type + 1 byte is_last + 32 bytes sender + 64 bytes message_id + 4 bytes payload_len + payload
+    Formato: 2 bytes client_id_len + client_id + 1 byte csv_type + 1 byte is_last + 32 bytes sender + 4 bytes payload_len + payload
     
     El campo sender siempre ocupa 32 bytes (null-padded si es más corto o None).
-    El campo message_id siempre ocupa 64 bytes (null-padded si es más corto o None).
-    
-    NOTA: Para retrocompatibilidad, si message_id es None se mantiene como campo vacío.
     """
     assert 1 <= csv_type <= 5, "csv_type debe estar entre 1 y 5"
     assert is_last in (0, 1), "is_last debe ser 0 o 1"
@@ -82,17 +79,9 @@ def build_message(client_id, csv_type: int, is_last: int, rows: List[str], sende
         sender_bytes = b""
     sender_bytes = sender_bytes.ljust(32, b'\x00')  # Pad with null bytes
     
-    # Handle message_id field (64 bytes, null-padded if empty)
-    if message_id is not None:
-        message_id_str = str(message_id)
-        message_id_bytes = message_id_str.encode("utf-8")[:64]  # Truncate if too long
-    else:
-        message_id_bytes = b""
-    message_id_bytes = message_id_bytes.ljust(64, b'\x00')  # Pad with null bytes
-    
-    # Header: 2 bytes client_id_len + client_id + 1 byte csv_type + 1 byte is_last + 32 bytes sender + 64 bytes message_id + 4 bytes payload_len
+    # Header: 2 bytes client_id_len + client_id + 1 byte csv_type + 1 byte is_last + 32 bytes sender + 4 bytes payload_len
     header = (struct.pack(">H", client_id_len) + client_id_bytes + 
-              struct.pack(">BB", csv_type, is_last) + sender_bytes + message_id_bytes + 
+              struct.pack(">BB", csv_type, is_last) + sender_bytes + 
               struct.pack(">I", payload_len))
     
     message = header + payload_bytes
@@ -102,22 +91,22 @@ def message_to_text(message: bytes) -> str:
     """
     Convierte el mensaje binario a texto plano (solo payload).
     """
-    # Need to parse to find payload offset due to variable client_id length
-    parsed = parse_message(message)
-    return "\n".join(parsed["rows"])
+    payload_len = struct.unpack(">I", message[6:10])[0]
+    payload = message[10:10+payload_len]
+    return payload.decode("utf-8")
 
-def text_to_message(text: str, client_id, csv_type: int, is_last: int, sender: str = None, message_id: str = None) -> Tuple[bytes, int]:
+def text_to_message(text: str, client_id, csv_type: int, is_last: int, sender: str = None) -> Tuple[bytes, int]:
     """
     Convierte texto plano (rows separados por \n) a mensaje binario.
     """
     rows = text.strip().split("\n")
-    return build_message(client_id, csv_type, is_last, rows, sender, message_id)
+    return build_message(client_id, csv_type, is_last, rows, sender)
 
 def parse_message(message: bytes) -> Dict:
     """
     Parsea el mensaje binario y devuelve un dict con los campos y las rows.
     
-    Formato: 2 bytes client_id_len + client_id + 1 byte csv_type + 1 byte is_last + 32 bytes sender + 64 bytes message_id + 4 bytes payload_len + payload
+    Formato: 2 bytes client_id_len + client_id + 1 byte csv_type + 1 byte is_last + 32 bytes sender + 4 bytes payload_len + payload
     """
     # Read client_id_len (2 bytes)
     client_id_len = struct.unpack(">H", message[:2])[0]
@@ -131,19 +120,12 @@ def parse_message(message: bytes) -> Dict:
     csv_type, is_last = struct.unpack(">BB", message[offset:offset+2])
     offset += 2
     
-    # NEW FORMAT: always expect 32-byte sender field
+    # NEW FORMAT ONLY: always expect 32-byte sender field
     SENDER_SIZE = 32
     sender_bytes = message[offset:offset+SENDER_SIZE]
     sender_bytes = sender_bytes.rstrip(b'\x00')  # Remove null padding
     sender = sender_bytes.decode("utf-8") if sender_bytes else None
     offset += SENDER_SIZE
-    
-    # NEW FORMAT: always expect 64-byte message_id field
-    MESSAGE_ID_SIZE = 64
-    message_id_bytes = message[offset:offset+MESSAGE_ID_SIZE]
-    message_id_bytes = message_id_bytes.rstrip(b'\x00')  # Remove null padding
-    message_id = message_id_bytes.decode("utf-8") if message_id_bytes else None
-    offset += MESSAGE_ID_SIZE
     
     # Read payload_len (4 bytes)
     payload_len = struct.unpack(">I", message[offset:offset+4])[0]
@@ -165,10 +147,6 @@ def parse_message(message: bytes) -> Dict:
     # Only add sender if it exists and is not empty
     if sender:
         result["sender"] = sender
-        
-    # Only add message_id if it exists and is not empty
-    if message_id:
-        result["message_id"] = message_id
         
     return result
 

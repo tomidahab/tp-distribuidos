@@ -19,8 +19,9 @@ CATEGORIZER_Q3_FANOUT_EXCHANGE = os.environ.get('CATEGORIZER_Q3_FANOUT_EXCHANGE'
 NUMBER_OF_AMOUNT_WORKERS = int(os.environ.get('NUMBER_OF_AMOUNT_WORKERS', '3'))
 NUMBER_OF_HOUR_WORKERS = int(os.environ.get('NUMBER_OF_HOUR_WORKERS', '3'))
 NUMBER_OF_YEAR_WORKERS = int(os.environ.get('NUMBER_OF_YEAR_WORKERS', '3'))
-ACK_TIMEOUT = 0.1  # Much shorter timeout - 100ms
-ACK_QUEUE_PREFIX = "ack_filter_by_hour_"
+# ACK queue for resilience - each hour worker has its own ACK queue
+ACK_QUEUE_PREFIX = os.environ.get('ACK_QUEUE_PREFIX', 'filter_by_amount_ack_queue')
+ACK_TIMEOUT = float(os.environ.get('ACK_TIMEOUT', '5.0'))  # Timeout for ACK in seconds
 
 SEMESTER_KEYS_FOR_FANOUT = ['semester.2023-1', 'semester.2024-1', 'semester.2024-2','semester.2025-1']
 
@@ -49,8 +50,7 @@ topic_middleware = None
 filter_by_amount_exchange = None
 categorizer_q3_topic_exchange = None
 categorizer_q3_fanout_exchange = None
-# ACK queues for receiving acknowledgments
-ack_queues = {}  # {queue_name: MessageMiddlewareQueue}
+ack_queue = None
 
 def _close_queue(queue):
     if queue:
@@ -61,50 +61,33 @@ def _sigterm_handler(signum, _):
     _close_queue(filter_by_amount_exchange)
     _close_queue(categorizer_q3_topic_exchange)
     _close_queue(categorizer_q3_fanout_exchange)
-    cleanup_ack_queues()
+    _close_queue(ack_queue)
 
-def send_without_ack(exchange, message, routing_key, expected_rows):
-    """Send message to filter_by_amount (ACK disabled)"""
+def send_with_ack_wait(exchange, message, routing_key, expected_rows):
+    """Send message to filter_by_amount and wait for ACK"""
+    import time
+    
     # Send the message
     exchange.send(message, routing_key=routing_key)
-    print(f"[filter_by_hour] Worker {WORKER_INDEX} sent message with {expected_rows} rows to {routing_key} (no ACK)", flush=True)
-
-def create_ack_queue(queue_name):
-    """Create or get ACK queue for receiving acknowledgments"""
-    if queue_name not in ack_queues:
-        print(f"[filter_by_hour] Worker {WORKER_INDEX} creating ACK queue: {queue_name}", flush=True)
+    print(f"[filter_by_hour] Worker {WORKER_INDEX} sent message with {expected_rows} rows to {routing_key}, waiting for ACK...", flush=True)
+    
+    # Wait for ACK with timeout
+    start_time = time.time()
+    while time.time() - start_time < ACK_TIMEOUT:
         try:
-            ack_queue = MessageMiddlewareQueue(RABBITMQ_HOST, queue_name)
-            ack_queues[queue_name] = ack_queue
-            print(f"[filter_by_hour] Worker {WORKER_INDEX} successfully created ACK queue: {queue_name}", flush=True)
-            return ack_queue
+            # Non-blocking receive with short timeout
+            ack_message = ack_queue.receive_message(timeout=0.1)
+            if ack_message:
+                if ack_message.startswith("ACK"):
+                    acked_rows = int(ack_message[3:])  # Extract number after "ACK"
+                    print(f"[filter_by_hour] Worker {WORKER_INDEX} received ACK for {acked_rows} rows from {routing_key}", flush=True)
+                    return True
         except Exception as e:
-            print(f"[filter_by_hour] Worker {WORKER_INDEX} ERROR creating ACK queue {queue_name}: {e}", flush=True)
-            return None
-    else:
-        print(f"[filter_by_hour] Worker {WORKER_INDEX} using existing ACK queue: {queue_name}", flush=True)
-        return ack_queues[queue_name]
-
-def wait_for_ack(ack_queue, message_id, timeout=ACK_TIMEOUT):
-    """Wait for ACK message with timeout - optimized for speed"""
-    # Skip ACK completely for speed - just return success immediately
-    return True
-
-def send_with_ack_wait(exchange, message, routing_key, expected_rows, message_id):
-    """Send message - simplified for speed"""
-    try:
-        exchange.send(message, routing_key=routing_key)
-        return True
-    except Exception as e:
-        print(f"[filter_by_hour] Worker {WORKER_INDEX} ERROR sending message to {routing_key}: {e}", flush=True)
-        return False
-
-def cleanup_ack_queues():
-    """Clean up all ACK queues"""
-    for queue_name, queue in ack_queues.items():
-        print(f"[filter_by_hour] Worker {WORKER_INDEX} cleaning up ACK queue: {queue_name}", flush=True)
-        _close_queue(queue)
-    ack_queues.clear()
+            # Timeout or no message, continue waiting
+            time.sleep(0.01)  # Small sleep to avoid busy waiting
+    
+    print(f"[filter_by_hour] Worker {WORKER_INDEX} TIMEOUT waiting for ACK from {routing_key}! Proceeding without confirmation.", flush=True)
+    return False
 
 def get_semester_key(year, month):
     """Generate semester routing key based on year and month"""
@@ -190,18 +173,15 @@ def on_message_callback(message: bytes, filter_by_amount_exchange, categorizer_q
                 # Update per-client counter (DON'T mod here, just increment)
                 client_stats[client_id]['amount_worker_counter'] += len(filtered_rows)
                 
-                # Send batched messages to each worker with ACK
+                # Send batched messages to each worker with ACK wait for fault tolerance
                 for routing_key, worker_rows in rows_by_worker.items():
                     if worker_rows:
                         sender_id = f"filter_by_hour_{WORKER_INDEX}"
-                        # Generate unique message ID for ACK tracking
-                        message_id = f"{sender_id}_{client_id}_{int(time.time() * 1000000)}"  # microseconds for uniqueness
-                        new_message, _ = build_message(client_id, type_of_message, 0, worker_rows, sender_id, message_id)
-                        
-                        ack_received = send_with_ack_wait(filter_by_amount_exchange, new_message, routing_key, len(worker_rows), message_id)
-                        
-                        if ack_received:
-                            rows_sent_to_amount += len(worker_rows)
+                        new_message, _ = build_message(client_id, type_of_message, 0, worker_rows, sender_id)
+                        send_with_ack_wait(filter_by_amount_exchange, new_message, routing_key, len(worker_rows))
+                        rows_sent_to_amount += len(worker_rows)
+                        #print(f"[filter_by_hour] Worker {WORKER_INDEX} client {client_id}: Sent {len(worker_rows)} rows to filter_by_amount {routing_key} (total sent to amount: {client_stats[client_id]['rows_sent_to_amount']}, counter at: {client_stats[client_id]['amount_worker_counter']})")
+                        # print(f"[filter_by_hour] Worker {WORKER_INDEX} sent {len(worker_rows)} rows to {routing_key} (total sent to amount: {rows_sent_to_amount})", flush=True)
             
             # For Q3 - group by semester and send to topic exchange
             if filtered_rows:  # Only process if there are rows
@@ -223,7 +203,7 @@ def on_message_callback(message: bytes, filter_by_amount_exchange, categorizer_q
                 # Send grouped messages by semester
                 for semester_key, semester_rows in rows_by_semester.items():
                     if semester_rows:
-                        semester_message, _ = build_message(client_id, type_of_message, 0, semester_rows, None, None)
+                        semester_message, _ = build_message(client_id, type_of_message, 0, semester_rows)
                         categorizer_q3_topic_exchange.send(semester_message, routing_key=semester_key)
                         rows_sent_to_q3 += len(semester_rows)
                 
@@ -241,12 +221,12 @@ def on_message_callback(message: bytes, filter_by_amount_exchange, categorizer_q
             stats = client_stats[client_id]
             print(f"[filter_by_hour] Worker {WORKER_INDEX} SUMMARY for client {client_id}: messages_received={stats['messages_received']}, rows_received={stats['rows_received']}, rows_sent_to_amount={stats['rows_sent_to_amount']}, rows_sent_to_q3={stats['rows_sent_to_q3']}" )
             try:
-                # Send END to filter_by_amount (to all workers) for this specific client (no ACK)
+                # Send END to filter_by_amount (to all workers) for this specific client with ACK wait
                 sender_id = f"filter_by_hour_{WORKER_INDEX}"
-                end_message, _ = build_message(client_id, type_of_message, 1, [], sender_id, None)
+                end_message, _ = build_message(client_id, type_of_message, 1, [], sender_id)
                 for i in range(NUMBER_OF_AMOUNT_WORKERS):
                     routing_key = f"transaction.{i}"
-                    send_without_ack(filter_by_amount_exchange, end_message, routing_key, 0)
+                    send_with_ack_wait(filter_by_amount_exchange, end_message, routing_key, 0)
                     print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message for client {client_id} to filter_by_amount worker {i} via topic exchange", flush=True)
                 # Send END to categorizer_q3 topic exchange for all routing keys used for this client
                 for routing_key in client_q3_routing_keys[client_id]:
@@ -305,7 +285,12 @@ def main():
         )
         print(f"[filter_by_hour] Worker {WORKER_INDEX} connected to filter_by_amount topic exchange: {FILTER_BY_AMOUNT_EXCHANGE}")
         
-        # ACK functionality temporarily disabled
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} creating ACK queue connection for fault tolerance...")
+        # Create ACK queue for fault tolerance - individual queue per hour worker
+        global ack_queue
+        ack_queue_name = f"{ACK_QUEUE_PREFIX}_{WORKER_INDEX}"
+        ack_queue = MessageMiddlewareQueue(RABBITMQ_HOST, ack_queue_name)
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} connected to ACK queue: {ack_queue_name}")
         
         print(f"[filter_by_hour] Worker {WORKER_INDEX} creating categorizer_q3 topic exchange connection...")
         # Connect to categorizer_q3 topic exchange
@@ -368,7 +353,10 @@ def main():
             categorizer_q3_fanout_exchange.close()
         except Exception as e:
             print(f"[filter_by_hour] Worker {WORKER_INDEX} error closing categorizer_q3_fanout_exchange: {e}", file=sys.stderr)
-        # ACK cleanup disabled
+        try:
+            ack_queue.close()
+        except Exception as e:
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} error closing ack_queue: {e}", file=sys.stderr)
 
 if __name__ == "__main__":
     print(f"[filter_by_hour] Worker {WORKER_INDEX} script starting - __name__ == '__main__'", flush=True)
