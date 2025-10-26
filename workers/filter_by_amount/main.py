@@ -69,9 +69,17 @@ def create_ack_queue(sender_id):
         return ack_queues[ack_queue_name]
 
 def send_ack(sender_id, message_id):
-    """Send ACK message back to sender - optimized for speed"""
-    # Skip ACK sending for speed
-    return True
+    """Send ACK message back to sender"""
+    try:
+        ack_queue = create_ack_queue(sender_id)
+        if ack_queue:
+            ack_message = f"ACK:{message_id}"
+            ack_queue.send(ack_message.encode())
+            return True
+        return False
+    except Exception as e:
+        print(f"[filter_by_amount] Worker {WORKER_INDEX} ERROR sending ACK to {sender_id}: {e}", flush=True)
+        return False
 
 def filter_message_by_amount(parsed_message, min_amount: float) -> list:
     try:

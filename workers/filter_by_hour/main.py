@@ -19,7 +19,7 @@ CATEGORIZER_Q3_FANOUT_EXCHANGE = os.environ.get('CATEGORIZER_Q3_FANOUT_EXCHANGE'
 NUMBER_OF_AMOUNT_WORKERS = int(os.environ.get('NUMBER_OF_AMOUNT_WORKERS', '3'))
 NUMBER_OF_HOUR_WORKERS = int(os.environ.get('NUMBER_OF_HOUR_WORKERS', '3'))
 NUMBER_OF_YEAR_WORKERS = int(os.environ.get('NUMBER_OF_YEAR_WORKERS', '3'))
-ACK_TIMEOUT = 0.1  # Much shorter timeout - 100ms
+ACK_TIMEOUT = 3.0  # 3 seconds timeout for fault tolerance
 ACK_QUEUE_PREFIX = "ack_filter_by_hour_"
 
 SEMESTER_KEYS_FOR_FANOUT = ['semester.2023-1', 'semester.2024-1', 'semester.2024-2','semester.2025-1']
@@ -86,15 +86,46 @@ def create_ack_queue(queue_name):
         return ack_queues[queue_name]
 
 def wait_for_ack(ack_queue, message_id, timeout=ACK_TIMEOUT):
-    """Wait for ACK message with timeout - optimized for speed"""
-    # Skip ACK completely for speed - just return success immediately
-    return True
+    """Wait for ACK message with timeout"""
+    try:
+        ack_queue.set_timeout(timeout)
+        ack_data = ack_queue.receive()
+        if ack_data:
+            ack_message = ack_data.decode()
+            if ack_message == f"ACK:{message_id}":
+                return True
+            else:
+                print(f"[filter_by_hour] Worker {WORKER_INDEX} received unexpected ACK: {ack_message}, expected: ACK:{message_id}", flush=True)
+        return False
+    except Exception as e:
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} timeout or error waiting for ACK {message_id}: {e}", flush=True)
+        return False
 
 def send_with_ack_wait(exchange, message, routing_key, expected_rows, message_id):
-    """Send message - simplified for speed"""
+    """Send message and wait for ACK"""
     try:
+        # Create ACK queue for this sender
+        sender_id = f"filter_by_hour_worker_{WORKER_INDEX}"
+        ack_queue_name = f"ack_{sender_id}"
+        ack_queue = create_ack_queue(ack_queue_name)
+        
+        if not ack_queue:
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} ERROR: Could not create ACK queue {ack_queue_name}", flush=True)
+            return False
+        
+        # Send the message
         exchange.send(message, routing_key=routing_key)
-        return True
+        
+        # Wait for ACK
+        ack_received = wait_for_ack(ack_queue, message_id)
+        
+        if ack_received:
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} successfully sent message with {expected_rows} rows to {routing_key} (ACK received)", flush=True)
+            return True
+        else:
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} WARNING: No ACK received for message {message_id} to {routing_key}", flush=True)
+            return False
+            
     except Exception as e:
         print(f"[filter_by_hour] Worker {WORKER_INDEX} ERROR sending message to {routing_key}: {e}", flush=True)
         return False
