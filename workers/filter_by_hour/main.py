@@ -101,6 +101,22 @@ def wait_for_ack(ack_queue, message_id, timeout=ACK_TIMEOUT):
         print(f"[filter_by_hour] Worker {WORKER_INDEX} timeout or error waiting for ACK {message_id}: {e}", flush=True)
         return False
 
+def send_ack(sender_id, message_id):
+    """Send ACK back to a sender (used when this worker receives a message)"""
+    try:
+        ack_queue_name = f"ack_{sender_id}"
+        ack_queue = create_ack_queue(ack_queue_name)
+        if ack_queue:
+            ack_message = f"ACK:{message_id}"
+            ack_queue.send(ack_message.encode())
+            # small log for debug
+            # print(f"[filter_by_hour] Worker {WORKER_INDEX} sent ACK for {message_id} to {sender_id}", flush=True)
+            return True
+        return False
+    except Exception as e:
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} ERROR sending ACK to {sender_id}: {e}", flush=True)
+        return False
+
 def send_with_ack_wait(exchange, message, routing_key, expected_rows, message_id):
     """Send message and wait for ACK"""
     try:
@@ -175,6 +191,15 @@ def on_message_callback(message: bytes, filter_by_amount_exchange, categorizer_q
     type_of_message = parsed_message['csv_type']  
     client_id = parsed_message['client_id']
     is_last = int(parsed_message['is_last'])
+    # Optional ACK fields
+    sender = parsed_message.get('sender')
+    message_id = parsed_message.get('message_id')
+    # Send ACK back to sender if requested
+    if sender and message_id:
+        try:
+            send_ack(sender, message_id)
+        except Exception:
+            pass
     
     # Update client stats
     client_stats[client_id]['messages_received'] += 1

@@ -2,6 +2,7 @@ import os
 import signal
 import sys
 import threading
+import time
 from time import sleep
 from datetime import datetime
 from common.protocol import parse_message, row_to_dict, build_message
@@ -52,6 +53,58 @@ client_stats = defaultdict(lambda: {
     'hour_worker_counter': 0,  # Per-client counter for hour workers
     'q4_message_counter': 0   # Per-client counter for q4 distribution
 })
+
+# ACK queues for receiving acknowledgments when this worker sends messages
+ack_queues = {}  # {queue_name: MessageMiddlewareQueue}
+
+def create_ack_queue(queue_name):
+    """Create or get ACK queue for receiving acknowledgments"""
+    if queue_name not in ack_queues:
+        try:
+            ack_queue = MessageMiddlewareQueue(RABBITMQ_HOST, queue_name)
+            ack_queues[queue_name] = ack_queue
+            return ack_queue
+        except Exception as e:
+            print(f"[filter_by_year] Worker {WORKER_INDEX} ERROR creating ACK queue {queue_name}: {e}", file=sys.stderr)
+            return None
+    return ack_queues[queue_name]
+
+def wait_for_ack(ack_queue, message_id, timeout=3.0):
+    """Wait for ACK message with timeout"""
+    try:
+        ack_queue.set_timeout(timeout)
+        ack_data = ack_queue.receive()
+        if ack_data:
+            ack_message = ack_data.decode()
+            if ack_message == f"ACK:{message_id}":
+                return True
+        return False
+    except Exception as e:
+        # timeout or error
+        return False
+
+def send_with_ack_wait(exchange, message, routing_key, expected_rows, message_id, timeout=3.0):
+    """Send message and wait for ACK on per-sender ack queue"""
+    try:
+        # Create own ACK queue to receive response
+        sender_id = f"filter_by_year_worker_{WORKER_INDEX}"
+        ack_queue_name = f"ack_{sender_id}"
+        ack_queue = create_ack_queue(ack_queue_name)
+        if not ack_queue:
+            print(f"[filter_by_year] Worker {WORKER_INDEX} ERROR: could not create ack queue {ack_queue_name}", file=sys.stderr)
+            return False
+
+        exchange.send(message, routing_key=routing_key)
+        ack_received = wait_for_ack(ack_queue, message_id, timeout=timeout)
+        if ack_received:
+            # print(f"[filter_by_year] Worker {WORKER_INDEX} ACK received for {message_id} to {routing_key}")
+            return True
+        else:
+            print(f"[filter_by_year] Worker {WORKER_INDEX} WARNING: No ACK received for message {message_id} to {routing_key}", file=sys.stderr)
+            return False
+    except Exception as e:
+        print(f"[filter_by_year] Worker {WORKER_INDEX} ERROR sending message to {routing_key}: {e}", file=sys.stderr)
+        return False
 
 def _close_queue(queue):
     if queue:
@@ -118,9 +171,12 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
                 # Send batched messages to each worker
                 for routing_key, worker_rows in rows_by_worker.items():
                     if worker_rows:
-                        new_message, _ = build_message(client_id, type_of_message, 0, worker_rows)
-                        hour_filter_exchange.send(new_message, routing_key=routing_key)
-                        #print(f"[filter_by_year] Worker {WORKER_INDEX} client {client_id}: Sent {len(worker_rows)} rows to filter_by_hour {routing_key} (total sent to hour: {client_stats[client_id]['transactions_rows_sent_to_hour']}, counter at: {client_stats[client_id]['hour_worker_counter']})")
+                        sender_id = f"filter_by_year_worker_{WORKER_INDEX}"
+                        message_id = f"{sender_id}_{client_id}_{int(time.time() * 1000000)}"
+                        new_message, _ = build_message(client_id, type_of_message, 0, worker_rows, sender_id, message_id)
+                        ack_received = send_with_ack_wait(hour_filter_exchange, new_message, routing_key, len(worker_rows), message_id)
+                        if not ack_received:
+                            print(f"[filter_by_year] Worker {WORKER_INDEX} WARNING: failed to deliver batch to {routing_key} (no ACK)", file=sys.stderr)
 
             # Send to categorizer_q4 workers  
             batches = defaultdict(list)
@@ -142,12 +198,17 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
             client_stats[client_id]['transactions_end_received'] += 1
             print(f"[filter_by_year] Worker {WORKER_INDEX} received transactions END message from client {client_id} (total END msgs: {client_stats[client_id]['transactions_end_received']})")
             
-            # Send END message to all filter_by_hour workers
-            end_message, _ = build_message(client_id, type_of_message, 1, [])
+            # Send END message to all filter_by_hour workers (with ACK)
             for i in range(NUMBER_OF_HOUR_WORKERS):
                 routing_key = f"hour.{i}"
-                hour_filter_exchange.send(end_message, routing_key=routing_key)
-                print(f"[filter_by_year] Worker {WORKER_INDEX} Sent END message for client {client_id} to filter_by_hour worker {i} via topic exchange", flush=True)
+                sender_id = f"filter_by_year_worker_{WORKER_INDEX}"
+                end_message_id = f"{client_id}_END_{i}_{WORKER_INDEX}"
+                end_message, _ = build_message(client_id, type_of_message, 1, [], sender_id, end_message_id)
+                ack_received = send_with_ack_wait(hour_filter_exchange, end_message, routing_key, 0, end_message_id)
+                if ack_received:
+                    print(f"[filter_by_year] Worker {WORKER_INDEX} Sent END message for client {client_id} to filter_by_hour worker {i} (ACK received)", flush=True)
+                else:
+                    print(f"[filter_by_year] Worker {WORKER_INDEX} WARNING: END message for client {client_id} to filter_by_hour worker {i} failed (no ACK)", flush=True)
             
             # Send messages for Q4 workers
             for store_id in range(CATEGORIZER_Q4_WORKERS):
