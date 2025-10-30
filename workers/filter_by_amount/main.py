@@ -21,6 +21,9 @@ rows_sent = 0
 client_end_messages = defaultdict(int)
 completed_clients = set()
 
+# Track last processed message_id per client to prevent duplicates
+last_message_processed_by_client = {}
+
 # Track detailed stats per client
 client_stats = defaultdict(lambda: {
     'messages_received': 0,
@@ -57,78 +60,137 @@ def filter_message_by_amount(parsed_message, min_amount: float) -> list:
         print(f"[filter] Error parsing message: {e}", file=sys.stderr)
         return []
 
-def on_message_callback(message: bytes, topic_middleware, should_stop):
-    global rows_received, rows_sent, client_end_messages, completed_clients, client_stats
+def send_ack(sender_id, message_id):
+    """Send ACK response to filter_by_hour worker"""
+    try:
+        # Use sender_id directly to create ACK queue name
+        ack_queue_name = f"ack_queue_{sender_id}"
+        
+        # Create or reuse ACK queue connection
+        ack_queue = MessageMiddlewareQueue(RABBITMQ_HOST, ack_queue_name)
+        
+        # Send ACK message
+        ack_message = f"ACK:{message_id}"
+        ack_queue.send(ack_message.encode())
+        
+        print(f"[filter_by_amount] Worker {WORKER_INDEX} sent ACK to {ack_queue_name} for message {message_id}", flush=True)
+        
+    except Exception as e:
+        print(f"[filter_by_amount] Worker {WORKER_INDEX} ERROR sending ACK for message {message_id}: {e}", flush=True)
+
+def on_message_callback(message: bytes, topic_middleware, should_stop, delivery_tag=None, channel=None):
+    global rows_received, rows_sent, client_end_messages, completed_clients, client_stats, last_message_processed_by_client
     
     if should_stop.is_set():  # Don't process if we're stopping
+        if delivery_tag and channel:
+            channel.basic_nack(delivery_tag=delivery_tag, requeue=True)
         return
         
-    # print(f"[filter_by_amount] Worker {WORKER_INDEX} received a message!", flush=True)
-    parsed_message = parse_message(message)
-    type_of_message = parsed_message['csv_type']  
-    client_id = parsed_message['client_id']
-    is_last = parsed_message['is_last']
-    
-    # Update client stats
-    client_stats[client_id]['messages_received'] += 1
-    client_stats[client_id]['rows_received'] += len(parsed_message['rows'])
-    
-    # Count incoming rows
-    incoming_rows = len(parsed_message['rows'])
-    rows_received += incoming_rows
-    
-    #print(f"[filter_by_amount] Worker {WORKER_INDEX} received message from client {client_id} with {incoming_rows} rows, is_last={is_last} (total msgs: {client_stats[client_id]['messages_received']}, total rows: {client_stats[client_id]['rows_received']})")
-    
-    if is_last:
-        client_stats[client_id]['end_messages_received'] += 1
-        client_end_messages[client_id] += 1
-        print(f"[filter_by_amount] Worker {WORKER_INDEX} received END message {client_end_messages[client_id]}/{NUMBER_OF_HOUR_WORKERS} for client {client_id}", flush=True)
-    
-    # Skip if client already completed - check AFTER processing END message
-    if client_id in completed_clients:
-        print(f"[filter_by_amount] Worker {WORKER_INDEX} ignoring message from already completed client {client_id}")
-        return
-    
-    filtered_rows = filter_message_by_amount(parsed_message, MIN_AMOUNT)
-    
-    #print(f"[filter_by_amount] Worker {WORKER_INDEX} client {client_id}: {len(filtered_rows)} rows passed amount filter (from {len(parsed_message['rows'])} input rows)")
-    
-    # Check if this client has completed (received all END messages)
-    client_completed = client_end_messages[client_id] >= NUMBER_OF_HOUR_WORKERS
-    
-    # Debug logging for client_1
-    if client_id == "client_1" and is_last:
-        print(f"[filter_by_amount] Worker {WORKER_INDEX} DEBUG client_1: is_last={is_last}, client_completed={client_completed}, end_messages={client_end_messages[client_id]}")
-    
-    if filtered_rows or (is_last and client_completed):
-        client_stats[client_id]['rows_sent'] += len(filtered_rows)
+    try:
+        # print(f"[filter_by_amount] Worker {WORKER_INDEX} received a message!", flush=True)
+        parsed_message = parse_message(message)
+        type_of_message = parsed_message['csv_type']  
+        client_id = parsed_message['client_id']
+        is_last = parsed_message['is_last']
         
-        global queue_result
-        # Reuse connection instead of creating new one each time
-        if queue_result is None:
-            queue_result = MessageMiddlewareQueue(RABBITMQ_HOST, RESULT_QUEUE)
+        # Extract ACK information if available
+        sender_id = parsed_message.get('sender', '')
+        message_id = parsed_message.get('message_id', '')
         
-        # Only send is_last=1 if this client has received all END messages
-        final_is_last = 1 if (is_last and client_completed) else 0
-        new_message, _ = build_message(client_id, type_of_message, final_is_last, filtered_rows)
-        queue_result.send(new_message)
-        # Don't close connection after each message - reuse it!
+        # Check for duplicate messages using message_id
+        if message_id and client_id in last_message_processed_by_client:
+            if last_message_processed_by_client[client_id] == message_id:
+                print(f"[filter_by_amount] Worker {WORKER_INDEX} DUPLICATE message detected for client {client_id}, message_id {message_id} - skipping", flush=True)
+                # ACK the duplicate message to avoid reprocessing
+                if delivery_tag and channel:
+                    channel.basic_ack(delivery_tag=delivery_tag)
+                return
         
-        # Count outgoing rows
-        rows_sent += len(filtered_rows)
-        #print(f"[filter_by_amount] Worker {WORKER_INDEX} sent {len(filtered_rows)} filtered rows for client {client_id}, final_is_last={final_is_last} (total sent: {client_stats[client_id]['rows_sent']})", flush=True)
+        # Update last processed message_id for this client
+        if message_id:
+            last_message_processed_by_client[client_id] = message_id
+            print(f"[filter_by_amount] Worker {WORKER_INDEX} processing message_id {message_id} for client {client_id}", flush=True)
+            
+        # Update client stats
+        client_stats[client_id]['messages_received'] += 1
+        client_stats[client_id]['rows_received'] += len(parsed_message['rows'])
         
-        # Mark client as completed and print summary AFTER sending final message
-        if final_is_last == 1:
-            if client_id not in completed_clients:
-                completed_clients.add(client_id)
-                stats = client_stats[client_id]
-                print(f"[filter_by_amount] Worker {WORKER_INDEX} SUMMARY for client {client_id}: messages_received={stats['messages_received']}, rows_received={stats['rows_received']}, rows_sent={stats['rows_sent']}, end_messages_received={stats['end_messages_received']}")
+        # Count incoming rows
+        incoming_rows = len(parsed_message['rows'])
+        rows_received += incoming_rows
+        
+        #print(f"[filter_by_amount] Worker {WORKER_INDEX} received message from client {client_id} with {incoming_rows} rows, is_last={is_last} (total msgs: {client_stats[client_id]['messages_received']}, total rows: {client_stats[client_id]['rows_received']})")
+        
+        if is_last:
+            client_stats[client_id]['end_messages_received'] += 1
+            client_end_messages[client_id] += 1
+            print(f"[filter_by_amount] Worker {WORKER_INDEX} received END message {client_end_messages[client_id]}/{NUMBER_OF_HOUR_WORKERS} for client {client_id}", flush=True)
+        
+        # Skip if client already completed - check AFTER processing END message
+        if client_id in completed_clients:
+            print(f"[filter_by_amount] Worker {WORKER_INDEX} ignoring message from already completed client {client_id}")
+            # ACK the message even if skipping to avoid requeue
+            if delivery_tag and channel:
+                channel.basic_ack(delivery_tag=delivery_tag)
+            return
+        
+        filtered_rows = filter_message_by_amount(parsed_message, MIN_AMOUNT)
+        
+        #print(f"[filter_by_amount] Worker {WORKER_INDEX} client {client_id}: {len(filtered_rows)} rows passed amount filter (from {len(parsed_message['rows'])} input rows)")
+        
+        # Check if this client has completed (received all END messages)
+        client_completed = client_end_messages[client_id] >= NUMBER_OF_HOUR_WORKERS
+        
+        # Debug logging for client_1
+        if client_id == "client_1" and is_last:
+            print(f"[filter_by_amount] Worker {WORKER_INDEX} DEBUG client_1: is_last={is_last}, client_completed={client_completed}, end_messages={client_end_messages[client_id]}")
+        
+        if filtered_rows or (is_last and client_completed):
+            client_stats[client_id]['rows_sent'] += len(filtered_rows)
+            
+            global queue_result
+            # Reuse connection instead of creating new one each time
+            if queue_result is None:
+                queue_result = MessageMiddlewareQueue(RABBITMQ_HOST, RESULT_QUEUE)
+            
+            # Only send is_last=1 if this client has received all END messages
+            final_is_last = 1 if (is_last and client_completed) else 0
+            new_message, _ = build_message(client_id, type_of_message, final_is_last, filtered_rows)
+            queue_result.send(new_message)
+            # Don't close connection after each message - reuse it!
+            
+            # Count outgoing rows
+            rows_sent += len(filtered_rows)
+            #print(f"[filter_by_amount] Worker {WORKER_INDEX} sent {len(filtered_rows)} filtered rows for client {client_id}, final_is_last={final_is_last} (total sent: {client_stats[client_id]['rows_sent']})", flush=True)
+            
+            # Mark client as completed and print summary AFTER sending final message
+            if final_is_last == 1:
+                if client_id not in completed_clients:
+                    completed_clients.add(client_id)
+                    stats = client_stats[client_id]
+                    print(f"[filter_by_amount] Worker {WORKER_INDEX} SUMMARY for client {client_id}: messages_received={stats['messages_received']}, rows_received={stats['rows_received']}, rows_sent={stats['rows_sent']}, end_messages_received={stats['end_messages_received']}")
+        
+        # Send ACK response to sender if sender_id and message_id are available
+        # Currently disabled because filter_by_hour is not reading ACKs
+        # if sender_id and message_id:
+        #     send_ack(sender_id, message_id)
+        
+        # Manual ACK: Only acknowledge after successful processing
+        if delivery_tag and channel:
+            channel.basic_ack(delivery_tag=delivery_tag)
+            print(f"[filter_by_amount] Worker {WORKER_INDEX} ACK sent for message from client {client_id}", flush=True)
+            
+    except Exception as e:
+        print(f"[filter_by_amount] Worker {WORKER_INDEX} ERROR processing message: {e}", flush=True)
+        # NACK on error to requeue the message
+        if delivery_tag and channel:
+            channel.basic_nack(delivery_tag=delivery_tag, requeue=True)
+            print(f"[filter_by_amount] Worker {WORKER_INDEX} NACK sent (requeue=True) due to error", flush=True)
 
 
 def make_on_message_callback(topic_middleware, should_stop):
-    def wrapper(message: bytes):
-        on_message_callback(message, topic_middleware, should_stop)
+    def wrapper(message: bytes, delivery_tag, channel):
+        on_message_callback(message, topic_middleware, should_stop, delivery_tag, channel)
     return wrapper
 
 
@@ -137,10 +199,11 @@ def main():
     signal.signal(signal.SIGTERM, _sigterm_handler)
     signal.signal(signal.SIGINT, _sigterm_handler)
     # Global counters for debugging
-    global rows_received, rows_sent, end_messages_received
+    global rows_received, rows_sent, end_messages_received, last_message_processed_by_client
     rows_received = 0
     rows_sent = 0
     end_messages_received = 0
+    last_message_processed_by_client = {}
     
     sleep(config.MIDDLEWARE_UP_TIME)  # Esperar a que RabbitMQ esté listo
     print(f"[filter_by_amount] Worker {WORKER_INDEX} connecting to RabbitMQ at {RABBITMQ_HOST}, exchange: {RECEIVER_EXCHANGE}, filter by min amount: {MIN_AMOUNT}", flush=True)
@@ -164,9 +227,9 @@ def main():
     should_stop = threading.Event()
     
     try:        
-        # Start consuming from topic exchange (blocking)
+        # Start consuming from topic exchange with manual ACK (blocking)
         topic_callback = make_on_message_callback(topic_middleware, should_stop)
-        topic_middleware.start_consuming(topic_callback)
+        topic_middleware.start_consuming(topic_callback, auto_ack=False)
         
         print(f"[filter_by_amount] Worker {WORKER_INDEX} topic consuming finished", flush=True)
         

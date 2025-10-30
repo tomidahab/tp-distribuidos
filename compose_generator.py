@@ -1,6 +1,6 @@
 FILENAME = "docker-compose.yaml"
 
-CLIENTS = 5
+CLIENTS = 2
 YEAR_FILTERS = 3
 HOUR_FILTERS = 4
 AMOUNT_FILTERS = 2
