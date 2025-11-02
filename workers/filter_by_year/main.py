@@ -53,6 +53,9 @@ client_stats = defaultdict(lambda: {
     'q4_message_counter': 0   # Per-client counter for q4 distribution
 })
 
+# Track last processed message_id per client to prevent duplicates
+last_message_processed_by_client = {}
+
 def _close_queue(queue):
     if queue:
         queue.close()
@@ -70,21 +73,38 @@ def _sigterm_handler(signum, _):
 print(f"[filter_by_year] Worker {WORKER_INDEX} starting with FILTER_YEARS: {FILTER_YEARS}")
 
 
-def on_message_callback_transactions(message: bytes, hour_filter_exchange, categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange):
-    global client_stats
+def on_message_callback_transactions(message: bytes, hour_filter_exchange, categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange, delivery_tag=None, channel=None):
+    global client_stats, last_message_processed_by_client
     try:
         parsed_message = parse_message(message)
         type_of_message = parsed_message['csv_type']  
         client_id = parsed_message['client_id']
         is_last = parsed_message['is_last']
+
+        # Extract ACK information if available
+        sender_id = parsed_message.get('sender', '')
+        message_id = parsed_message.get('message_id', '')
+
+        # Check for duplicate messages using message_id
+        if message_id and client_id in last_message_processed_by_client:
+            if last_message_processed_by_client[client_id] == message_id:
+                print(f"[filter_by_year] Worker {WORKER_INDEX} DUPLICATE message detected for client {client_id}, message_id {message_id} - skipping", flush=True)
+                # ACK the duplicate message to avoid reprocessing
+                if delivery_tag and channel:
+                    channel.basic_ack(delivery_tag=delivery_tag)
+                return
+
+        # Update last processed message_id for this client
+        if message_id:
+            last_message_processed_by_client[client_id] = message_id
+            print(f"[filter_by_year] Worker {WORKER_INDEX} processing message_id {message_id} for client {client_id}", flush=True)
+
         new_rows = []
 
         # Update stats
         client_stats[client_id]['transactions_received'] += 1
         client_stats[client_id]['transactions_rows_received'] += len(parsed_message['rows'])
         
-        #print(f"[filter_by_year] Worker {WORKER_INDEX} received transactions message from client {client_id} with {len(parsed_message['rows'])} rows, is_last={is_last} (total msgs: {client_stats[client_id]['transactions_received']}, total rows: {client_stats[client_id]['transactions_rows_received']})")
-
         for row in parsed_message['rows']:
             dic_fields_row = row_to_dict(row, type_of_message)
             try:
@@ -120,7 +140,6 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
                     if worker_rows:
                         new_message, _ = build_message(client_id, type_of_message, 0, worker_rows)
                         hour_filter_exchange.send(new_message, routing_key=routing_key)
-                        #print(f"[filter_by_year] Worker {WORKER_INDEX} client {client_id}: Sent {len(worker_rows)} rows to filter_by_hour {routing_key} (total sent to hour: {client_stats[client_id]['transactions_rows_sent_to_hour']}, counter at: {client_stats[client_id]['hour_worker_counter']})")
 
             # Send to categorizer_q4 workers  
             batches = defaultdict(list)
@@ -135,7 +154,6 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
             for routing_key, batch_rows in batches.items():
                 if batch_rows:
                     q4_message, _ = build_message(client_id, type_of_message, 0, batch_rows)
-                    #print(f"[filter_by_year] Worker {WORKER_INDEX} client {client_id}: Sending {len(batch_rows)} rows to categorizer_q4 with routing key {routing_key}")
                     categorizer_q4_topic_exchange.send(q4_message, routing_key=routing_key)
 
         if is_last:
@@ -160,29 +178,42 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
             stats = client_stats[client_id]
             print(f"[filter_by_year] Worker {WORKER_INDEX} SUMMARY for client {client_id}: transactions_received={stats['transactions_received']}, transactions_rows_received={stats['transactions_rows_received']}, transactions_rows_sent_to_hour={stats['transactions_rows_sent_to_hour']}, transactions_rows_sent_to_q4={stats['transactions_rows_sent_to_q4']}")
 
-            # Using topic instead of fanout so do not use the next code
-            # end_message, _ = build_message(client_id, type_of_message, 1, [])
-            # hour_filter_queue.send(end_message)
-            # print("[filter_by_year] Sent END message to categorizer_q4 via fanout exchange.")
-            # categorizer_q4_fanout_exchange.send(end_message)
-            # print("[filter_by_year] Sent END message to hour filter queue.")
-
     except Exception as e:
         print(f"[transactions] Worker {WORKER_INDEX} Error decoding message: {e}", file=sys.stderr)
+        if delivery_tag and channel:
+            channel.basic_nack(delivery_tag=delivery_tag, requeue=True)
+        return
 
-def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_categorizer_fanout_exchange):
-    global client_stats
+    # Manual ACK: Only acknowledge after successful processing
+    if delivery_tag and channel:
+        channel.basic_ack(delivery_tag=delivery_tag)
+
+def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_categorizer_fanout_exchange, delivery_tag=None, channel=None):
+    global client_stats, last_message_processed_by_client
     try:
         parsed_message = parse_message(message)
         type_of_message = parsed_message['csv_type']  
         client_id = parsed_message['client_id']
         is_last = parsed_message['is_last']
 
+        # Extract ACK information if available
+        message_id = parsed_message.get('message_id', '')
+
+        # Check for duplicate messages using message_id
+        if message_id and client_id in last_message_processed_by_client:
+            if last_message_processed_by_client[client_id] == message_id:
+                print(f"[filter_by_year] Worker {WORKER_INDEX} DUPLICATE t_items message for client {client_id}, message_id {message_id} - skipping", flush=True)
+                if delivery_tag and channel:
+                    channel.basic_ack(delivery_tag=delivery_tag)
+                return
+
+        if message_id:
+            last_message_processed_by_client[client_id] = message_id
+            print(f"[filter_by_year] Worker {WORKER_INDEX} processing t_items message_id {message_id} for client {client_id}", flush=True)
+
         # Update stats
         client_stats[client_id]['transaction_items_received'] += 1
         client_stats[client_id]['transaction_items_rows_received'] += len(parsed_message['rows'])
-
-        #print(f"[filter_by_year] Worker {WORKER_INDEX} received transaction_items message from client {client_id} with {len(parsed_message['rows'])} rows, is_last={is_last} (total msgs: {client_stats[client_id]['transaction_items_received']}, total rows: {client_stats[client_id]['transaction_items_rows_received']})")
 
         rows_by_month = defaultdict(list)
         for row in parsed_message['rows']:
@@ -201,7 +232,6 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
                 client_stats[client_id]['transaction_items_rows_sent_to_q2'] += len(rows)
                 new_message, _ = build_message(client_id, type_of_message, 0, rows)
                 routing_key = f"month.{month}"
-                #print(f"[filter_by_year] Worker {WORKER_INDEX} client {client_id}: Sending {len(rows)} rows for month {month} to categorizer_q2 with routing key {routing_key} (total sent to q2: {client_stats[client_id]['transaction_items_rows_sent_to_q2']})")
                 item_categorizer_exchange.send(new_message, routing_key=routing_key)
 
         if is_last == 1:
@@ -209,8 +239,6 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
             print(f"[filter_by_year] Worker {WORKER_INDEX} received transaction_items END message from client {client_id} (total END msgs: {client_stats[client_id]['transaction_items_end_received']})")
             
             end_message, _ = build_message(client_id, type_of_message, is_last, [])
-            # Send END message to all months (1-12) to ensure all categorizer_q2 workers receive it
-            # Sending this with (1, 13) range will make a categorizer receive the 3 messages that need to pass
             for month in range(1, 13, 13 // NUMBER_OF_Q2_CATEGORIZER_WORKERS):
                 routing_key = f"month.{month}"
                 item_categorizer_exchange.send(end_message, routing_key=routing_key)
@@ -219,8 +247,16 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
             # Print summary stats for this client
             stats = client_stats[client_id]
             print(f"[filter_by_year] Worker {WORKER_INDEX} T_ITEMS SUMMARY for client {client_id}: transaction_items_received={stats['transaction_items_received']}, transaction_items_rows_received={stats['transaction_items_rows_received']}, transaction_items_rows_sent_to_q2={stats['transaction_items_rows_sent_to_q2']}")
+
     except Exception as e:
         print(f"[t_items] Worker {WORKER_INDEX} Error decoding message: {e}", file=sys.stderr)
+        if delivery_tag and channel:
+            channel.basic_nack(delivery_tag=delivery_tag, requeue=True)
+        return
+
+    # Manual ACK
+    if delivery_tag and channel:
+        channel.basic_ack(delivery_tag=delivery_tag)
 
 def main():
     global receiver_exchange_t
@@ -318,25 +354,24 @@ def main():
         nonlocal transactions_end_received
         print(f"[filter_by_year] Worker {WORKER_INDEX} Starting transactions consumer...")
         
-        def on_transactions_message(message: bytes):
+        def wrapper(body, delivery_tag, channel):
             nonlocal transactions_end_received
             try:
-                parsed_message = parse_message(message)
-                is_last = parsed_message['is_last']
-                
+                # Parse to check END flag for logging
+                parsed_message = parse_message(body)
+                is_last = parsed_message.get('is_last')
                 if is_last:
                     transactions_end_received += 1
-                    parsed_msg = parse_message(message)
-                    client_id = parsed_msg['client_id']
+                    client_id = parsed_message.get('client_id')
                     print(f"[filter_by_year] Worker {WORKER_INDEX} received transactions END message {transactions_end_received} from client {client_id}")
-                    # Don't stop consuming - keep processing messages from multiple clients
-                
-                on_message_callback_transactions(message, hour_filter_exchange, categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange)
+
+                # Call processing function that handles ACK/NACK
+                on_message_callback_transactions(body, hour_filter_exchange, categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange, delivery_tag=delivery_tag, channel=channel)
             except Exception as e:
                 print(f"[filter_by_year] Worker {WORKER_INDEX} Error in transactions callback: {e}", file=sys.stderr)
-        
+
         try:
-            receiver_exchange_t.start_consuming(on_transactions_message)
+            receiver_exchange_t.start_consuming(wrapper, auto_ack=False)
         except Exception as e:
             print(f"[filter_by_year] Worker {WORKER_INDEX} Error consuming transactions: {e}", file=sys.stderr)
     
@@ -345,26 +380,25 @@ def main():
         nonlocal transaction_items_end_received
         print(f"[filter_by_year] Worker {WORKER_INDEX} Starting transaction_items consumer...")
         
-        def on_transaction_items_message(message: bytes):
+        def wrapper(body, delivery_tag, channel):
             nonlocal transaction_items_end_received
             try:
-                parsed_message = parse_message(message)
-                is_last = parsed_message['is_last']
-                
-                # Always process the message first
-                on_message_callback_t_items(message, item_categorizer_exchange, item_categorizer_fanout_exchange)
-                
+                parsed_message = parse_message(body)
+                is_last = parsed_message.get('is_last')
+
+                # Call processing function that handles ACK/NACK
+                on_message_callback_t_items(body, item_categorizer_exchange, item_categorizer_fanout_exchange, delivery_tag=delivery_tag, channel=channel)
+
                 if is_last:
                     transaction_items_end_received += 1
-                    client_id = parsed_message['client_id']
+                    client_id = parsed_message.get('client_id')
                     print(f"[filter_by_year] Worker {WORKER_INDEX} received transaction_items END message {transaction_items_end_received} from client {client_id}")
-                    # Don't stop consuming - keep processing messages from multiple clients
-                
+
             except Exception as e:
                 print(f"[filter_by_year] Worker {WORKER_INDEX} Error in transaction_items callback: {e}", file=sys.stderr)
-        
+
         try:
-            receiver_exchange_t_items.start_consuming(on_transaction_items_message)
+            receiver_exchange_t_items.start_consuming(wrapper, auto_ack=False)
         except Exception as e:
             print(f"[filter_by_year] Worker {WORKER_INDEX} Error consuming transaction_items: {e}", file=sys.stderr)
     
