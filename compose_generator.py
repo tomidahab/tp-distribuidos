@@ -8,6 +8,7 @@ Q2_CATEGORIZERS = 3
 Q3_CATEGORIZERS = 2 # NOTE: This will always be <= Q3_SEMESTERS Count
 Q4_CATEGORIZERS = 3
 BIRTHDAY_MAPPERS = 3
+HEALTH_CHECKERS = 3
 
 Q3_SEMESTERS = [
     "semester.2024-1",
@@ -251,6 +252,24 @@ def generate_compose_file():
             wln(3, f"- BIRTHDAY_MAPPERS={BIRTHDAY_MAPPERS}")
             wln(3, "- BIRTHDAY_DICT_QUEUE=birthday_dictionary_queue")
             wln(3, f"- NUMBER_OF_YEAR_WORKERS={YEAR_FILTERS}")
+            wln(2, "depends_on:")
+            wln(3, "- rabbitmq_server")
+            wln(3, "- gateway")
+            f.write("\n")
+            
+        # ====================
+        # Health Checker
+        # ====================
+        for i in range(HEALTH_CHECKERS):
+            wln(1, f"health_checker_{i + 1}:")
+            wln(2, "build:")
+            wln(3, "context: .")
+            wln(3, "dockerfile: ./workers/health_checker/Dockerfile")
+            wln(2, f"container_name: health_checker_{i + 1}")
+            wln(2, "environment:")
+            wln(3, "- RABBITMQ_HOST=rabbitmq_server")
+            wln(3, f"- WORKER_INDEX={i}")
+            wln(3, f"- AMOUNT_OF_WORKERS={HEALTH_CHECKERS}")
             wln(2, "depends_on:")
             wln(3, "- rabbitmq_server")
             wln(3, "- gateway")
