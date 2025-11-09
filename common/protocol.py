@@ -144,48 +144,59 @@ def parse_message(message: bytes) -> Dict:
     message_id_bytes = message[offset:offset+message_id_len]
     message_id = message_id_bytes.decode("utf-8")
     
-    # Try to determine if this message has sender field (new protocol) or not (old protocol)
+    # Try to determine protocol version by checking message structure
     offset += message_id_len
     
-    # We'll try to read what should be sender_len, but if the value is too high (>127)
-    # it's probably csv_type from old protocol
-    potential_sender_len = struct.unpack(">B", message[offset:offset+1])[0]
-    
-    if potential_sender_len <= 127 and offset + 1 + potential_sender_len < len(message):
-        # This looks like a valid sender_len, try new protocol
-        try:
-            # Read sender (sender_len bytes)
-            offset += 1
-            sender_bytes = message[offset:offset+potential_sender_len]
-            sender = sender_bytes.decode("utf-8")
+    # Try new protocol first (more restrictive check)
+    try:
+        potential_sender_len = struct.unpack(">B", message[offset:offset+1])[0]
+        
+        # Valid sender_len should be reasonable (1-50 chars typically)
+        if 1 <= potential_sender_len <= 50:
+            sender_offset = offset + 1
             
-            # Read csv_type, is_last, payload_len
-            offset += potential_sender_len
-            csv_type, is_last, payload_len = struct.unpack(">BBI", message[offset:offset+6])
-            
-            # Validate that this makes sense
-            payload_offset = offset + 6
-            if payload_offset + payload_len <= len(message):
-                # This looks valid - new protocol
-                payload = message[payload_offset:payload_offset+payload_len]
-                payload_text = payload.decode("utf-8")
-                rows = payload_text.split("\n") if payload_text else []
+            # Check if we have enough bytes for sender
+            if sender_offset + potential_sender_len < len(message):
+                sender_bytes = message[sender_offset:sender_offset + potential_sender_len]
                 
-                return {
-                    "client_id": client_id,
-                    "message_id": message_id,
-                    "sender": sender,
-                    "csv_type": csv_type,
-                    "csv_type_name": CSV_TYPES.get(csv_type, "unknown"),
-                    "is_last": is_last,
-                    "rows": rows
-                }
-        except (struct.error, UnicodeDecodeError):
-            pass  # Fall through to old protocol
+                # Try to decode as UTF-8 - if it fails, probably old protocol
+                try:
+                    sender = sender_bytes.decode("utf-8")
+                    
+                    # Check if sender contains only valid characters (alphanumeric + underscore)
+                    if all(c.isalnum() or c in '_-' for c in sender):
+                        # Read csv_type, is_last, payload_len after sender
+                        header_offset = sender_offset + potential_sender_len
+                        if header_offset + 6 <= len(message):
+                            csv_type, is_last, payload_len = struct.unpack(">BBI", message[header_offset:header_offset+6])
+                            
+                            # Final validation: check if payload fits
+                            payload_offset = header_offset + 6
+                            if payload_offset + payload_len == len(message):
+                                # This looks like valid new protocol
+                                payload = message[payload_offset:payload_offset+payload_len]
+                                payload_text = payload.decode("utf-8")
+                                rows = payload_text.split("\n") if payload_text else []
+                                
+                                print(f"[parse_message] NEW protocol detected: sender={sender}, csv_type={csv_type}", flush=True)
+                                
+                                return {
+                                    "client_id": client_id,
+                                    "message_id": message_id,
+                                    "sender": sender,
+                                    "csv_type": csv_type,
+                                    "csv_type_name": CSV_TYPES.get(csv_type, "unknown"),
+                                    "is_last": is_last,
+                                    "rows": rows
+                                }
+                except UnicodeDecodeError:
+                    pass  # Fall through to old protocol
+    except (struct.error, IndexError):
+        pass  # Fall through to old protocol
     
     # Fall back to old protocol (no sender field)
-    # potential_sender_len is actually csv_type
-    csv_type = potential_sender_len
+    # The byte we read as potential_sender_len is actually csv_type
+    csv_type = struct.unpack(">B", message[offset:offset+1])[0]
     is_last, payload_len = struct.unpack(">BI", message[offset+1:offset+6])
     
     # Read payload
@@ -193,6 +204,8 @@ def parse_message(message: bytes) -> Dict:
     payload = message[payload_offset:payload_offset+payload_len]
     payload_text = payload.decode("utf-8")
     rows = payload_text.split("\n") if payload_text else []
+    
+    print(f"[parse_message] OLD protocol detected: csv_type={csv_type}", flush=True)
     
     return {
         "client_id": client_id,

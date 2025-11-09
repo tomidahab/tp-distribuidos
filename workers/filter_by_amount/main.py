@@ -210,8 +210,8 @@ def on_message_callback(message: bytes, topic_middleware, should_stop, delivery_
             
             # Only send is_last=1 if this client has received all END messages
             final_is_last = 1 if (is_last and client_completed) else 0
-            sender = f"filter_by_amount_worker_{WORKER_INDEX}"
-            new_message, _ = build_message(client_id, type_of_message, final_is_last, filtered_rows, sender=sender)
+            outgoing_sender = f"filter_by_amount_worker_{WORKER_INDEX}"
+            new_message, _ = build_message(client_id, type_of_message, final_is_last, filtered_rows, sender=outgoing_sender)
             queue_result.send(new_message)
             # Don't close connection after each message - reuse it!
             
