@@ -89,8 +89,10 @@ client_stats = defaultdict(lambda: {
     'q4_message_counter': 0   # Per-client counter for q4 distribution
 })
 
-# Track last processed message_id per client to prevent duplicates
-last_message_processed_by_client = {}
+# Track END messages per client
+end_messages_by_client = defaultdict(int)
+
+# Track detailed stats per client
 
 def _close_queue(queue):
     if queue:
@@ -110,7 +112,7 @@ print(f"[filter_by_year] Worker {WORKER_INDEX} starting with FILTER_YEARS: {FILT
 
 
 def on_message_callback_transactions(message: bytes, hour_filter_exchange, categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange, delivery_tag=None, channel=None):
-    global client_stats, last_message_processed_by_client
+    global client_stats
     try:
         parsed_message = parse_message(message)
         type_of_message = parsed_message['csv_type']  
@@ -139,19 +141,9 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
                 channel.basic_ack(delivery_tag=delivery_tag)
             return
 
-        # Check for duplicate messages using message_id
-        if message_id and client_id in last_message_processed_by_client:
-            if last_message_processed_by_client[client_id] == message_id:
-                print(f"[filter_by_year] Worker {WORKER_INDEX} DUPLICATE message detected for client {client_id}, message_id {message_id} - skipping (in-memory)", flush=True)
-                # ACK the duplicate message to avoid reprocessing
-                if delivery_tag and channel:
-                    channel.basic_ack(delivery_tag=delivery_tag)
-                return
-
-        # Update last processed message_id for this client
+        # Process message - no in-memory duplicate check by client (removed to avoid conflicts)
         if message_id:
-            last_message_processed_by_client[client_id] = message_id
-            print(f"[filter_by_year] Worker {WORKER_INDEX} processing message_id {message_id} for client {client_id}", flush=True)
+            print(f"[filter_by_year] Worker {WORKER_INDEX} processing message_id {message_id} for client {client_id} from sender {sender_id}", flush=True)
 
         new_rows = []
 
@@ -252,7 +244,7 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
         print(f"[filter_by_year] Worker {WORKER_INDEX} ACK sent for TRANSACTIONS message from client {client_id}, sender {sender_id}", flush=True)
 
 def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_categorizer_fanout_exchange, delivery_tag=None, channel=None):
-    global client_stats, last_message_processed_by_client
+    global client_stats
     try:
         parsed_message = parse_message(message)
         type_of_message = parsed_message['csv_type']  
@@ -281,17 +273,9 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
                 channel.basic_ack(delivery_tag=delivery_tag)
             return
 
-        # Check for duplicate messages using message_id
-        if message_id and client_id in last_message_processed_by_client:
-            if last_message_processed_by_client[client_id] == message_id:
-                print(f"[filter_by_year] Worker {WORKER_INDEX} DUPLICATE t_items message for client {client_id}, message_id {message_id} - skipping (in-memory)", flush=True)
-                if delivery_tag and channel:
-                    channel.basic_ack(delivery_tag=delivery_tag)
-                return
-
+        # Process message - no in-memory duplicate check by client (removed to avoid conflicts)
         if message_id:
-            last_message_processed_by_client[client_id] = message_id
-            print(f"[filter_by_year] Worker {WORKER_INDEX} processing t_items message_id {message_id} for client {client_id}", flush=True)
+            print(f"[filter_by_year] Worker {WORKER_INDEX} processing t_items message_id {message_id} for client {client_id} from sender {sender_id}", flush=True)
 
         # Update stats
         client_stats[client_id]['transaction_items_received'] += 1

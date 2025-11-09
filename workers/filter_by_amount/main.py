@@ -21,15 +21,14 @@ def get_persistence_file(sender):
     """Get the persistence file path for a specific sender"""
     return f"{PERSISTENCE_DIR}/worker_{WORKER_INDEX}_last_message_sender_{sender}.txt"
 
-# Global counters for debugging
+# Global variables for statistics
 rows_received = 0
 rows_sent = 0
+end_messages_received = 0
+
 # Track END messages per client: {client_id: count}
 client_end_messages = defaultdict(int)
 completed_clients = set()
-
-# Track last processed message_id per client to prevent duplicates
-last_message_processed_by_client = {}
 
 # Track detailed stats per client
 client_stats = defaultdict(lambda: {
@@ -120,7 +119,7 @@ def send_ack(sender_id, message_id):
         print(f"[filter_by_amount] Worker {WORKER_INDEX} ERROR sending ACK for message {message_id}: {e}", flush=True)
 
 def on_message_callback(message: bytes, topic_middleware, should_stop, delivery_tag=None, channel=None):
-    global rows_received, rows_sent, client_end_messages, completed_clients, client_stats, last_message_processed_by_client
+    global rows_received, rows_sent, client_end_messages, completed_clients, client_stats
     
     if should_stop.is_set():  # Don't process if we're stopping
         if delivery_tag and channel:
@@ -156,19 +155,9 @@ def on_message_callback(message: bytes, topic_middleware, should_stop, delivery_
                 channel.basic_ack(delivery_tag=delivery_tag)
             return
         
-        # Check for duplicate messages using in-memory tracking (for same session)
-        if message_id and client_id in last_message_processed_by_client:
-            if last_message_processed_by_client[client_id] == message_id:
-                print(f"[filter_by_amount] Worker {WORKER_INDEX} DUPLICATE message detected for client {client_id}, message_id {message_id} - skipping (in-memory)", flush=True)
-                # ACK the duplicate message to avoid reprocessing
-                if delivery_tag and channel:
-                    channel.basic_ack(delivery_tag=delivery_tag)
-                return
-        
-        # Update last processed message_id for this client (in-memory)
+        # Process message - no in-memory duplicate check by client (removed to avoid conflicts)
         if message_id:
-            last_message_processed_by_client[client_id] = message_id
-            print(f"[filter_by_amount] Worker {WORKER_INDEX} processing message_id {message_id} for client {client_id}", flush=True)
+            print(f"[filter_by_amount] Worker {WORKER_INDEX} processing message_id {message_id} for client {client_id} from sender {sender}", flush=True)
             
         # Update client stats
         client_stats[client_id]['messages_received'] += 1
@@ -211,7 +200,8 @@ def on_message_callback(message: bytes, topic_middleware, should_stop, delivery_
             # Only send is_last=1 if this client has received all END messages
             final_is_last = 1 if (is_last and client_completed) else 0
             outgoing_sender = f"filter_by_amount_worker_{WORKER_INDEX}"
-            new_message, _ = build_message(client_id, type_of_message, final_is_last, filtered_rows, sender=outgoing_sender)
+            # CRITICAL: Use original message_id to enable duplicate detection in gateway
+            new_message, _ = build_message(client_id, type_of_message, final_is_last, filtered_rows, message_id=message_id, sender=outgoing_sender)
             queue_result.send(new_message)
             # Don't close connection after each message - reuse it!
             
@@ -260,11 +250,10 @@ def main():
     signal.signal(signal.SIGTERM, _sigterm_handler)
     signal.signal(signal.SIGINT, _sigterm_handler)
     # Global counters for debugging
-    global rows_received, rows_sent, end_messages_received, last_message_processed_by_client
+    global rows_received, rows_sent, end_messages_received
     rows_received = 0
     rows_sent = 0
     end_messages_received = 0
-    last_message_processed_by_client = {}
     
     sleep(config.MIDDLEWARE_UP_TIME)  # Esperar a que RabbitMQ esté listo
     print(f"[filter_by_amount] Worker {WORKER_INDEX} connecting to RabbitMQ at {RABBITMQ_HOST}, exchange: {RECEIVER_EXCHANGE}, filter by min amount: {MIN_AMOUNT}", flush=True)

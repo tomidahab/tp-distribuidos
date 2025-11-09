@@ -67,9 +67,6 @@ end_messages_received = 0
 client_end_messages = defaultdict(int)
 completed_clients = set()
 
-# Track last processed message_id per client to prevent duplicates
-last_message_processed_by_client = {}
-
 # Track routing keys used for categorizer_q3 per client
 client_q3_routing_keys = defaultdict(set)
 
@@ -131,7 +128,7 @@ def filter_message_by_hour(parsed_message, start_hour: int, end_hour: int) -> li
         return []
 
 def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=None):
-    global rows_received, rows_sent_to_amount, rows_sent_to_q3, end_messages_received, client_end_messages, completed_clients, client_stats, last_message_processed_by_client
+    global rows_received, rows_sent_to_amount, rows_sent_to_q3, end_messages_received, client_end_messages, completed_clients, client_stats
     global filter_by_amount_exchange, categorizer_q3_topic_exchange, categorizer_q3_fanout_exchange
     
     if should_stop.is_set():  # Don't process if we're stopping
@@ -168,19 +165,9 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
                 channel.basic_ack(delivery_tag=delivery_tag)
             return
         
-        # Check for duplicate messages using message_id
-        if message_id and client_id in last_message_processed_by_client:
-            if last_message_processed_by_client[client_id] == message_id:
-                print(f"[filter_by_hour] Worker {WORKER_INDEX} DUPLICATE message detected for client {client_id}, message_id {message_id} - skipping (in-memory)", flush=True)
-                # ACK the duplicate message to avoid reprocessing
-                if delivery_tag and channel:
-                    channel.basic_ack(delivery_tag=delivery_tag)
-                return
-        
-        # Update last processed message_id for this client
+        # Process message - no in-memory duplicate check by client (removed to avoid conflicts)
         if message_id:
-            last_message_processed_by_client[client_id] = message_id
-            print(f"[filter_by_hour] Worker {WORKER_INDEX} processing message_id {message_id} for client {client_id}", flush=True)
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} processing message_id {message_id} for client {client_id} from sender {sender_id}", flush=True)
         
         # Update client stats
         client_stats[client_id]['messages_received'] += 1

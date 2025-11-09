@@ -46,6 +46,10 @@ class Gateway:
         # Track results per client
         self.client_results = {}  # {client_id: {query_type: {worker_responses: int}}}
         self.results_lock = threading.RLock()
+        
+        # Track duplicate messages by sender to prevent duplicate results (in-memory only)
+        self.processed_messages_by_sender = {}  # {sender: set(message_ids)}
+        self.duplicates_lock = threading.RLock()
 
     def _sigterm_handler(self, signum, _):
         self.stop_by_sigterm = True
@@ -101,6 +105,21 @@ class Gateway:
             # Handle message by client
             parsed_message = parse_message(message)
             client_id = parsed_message.get('client_id')
+            message_id = parsed_message.get('message_id', '')
+            sender = parsed_message.get('sender', 'unknown')
+            
+            # Check for duplicate messages from the same sender (in-memory only since gateway doesn't restart)
+            with self.duplicates_lock:
+                if sender not in self.processed_messages_by_sender:
+                    self.processed_messages_by_sender[sender] = set()
+                
+                if message_id in self.processed_messages_by_sender[sender]:
+                    logging.info(f"[{result_queue}] DUPLICATE message detected from sender {sender}, message_id {message_id} - skipping")
+                    return
+                
+                # Add message_id to processed set for this sender
+                if message_id:
+                    self.processed_messages_by_sender[sender].add(message_id)
 
             with self.clients_lock:
                 self.clients[client_id].handle_message(self.queue_to_query(result_queue), parsed_message)
