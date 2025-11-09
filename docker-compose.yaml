@@ -222,6 +222,8 @@ services:
       - NUMBER_OF_HOUR_WORKERS=4
     depends_on:
       - rabbitmq_server
+    volumes:
+      - ./persistence/filter_by_amount_worker_0:/app/persistence
 
   filter_by_amount_worker_1:
     build:
@@ -237,6 +239,8 @@ services:
       - NUMBER_OF_HOUR_WORKERS=4
     depends_on:
       - rabbitmq_server
+    volumes:
+      - ./persistence/filter_by_amount_worker_1:/app/persistence
 
   categorizer_q2_worker_1:
     build:

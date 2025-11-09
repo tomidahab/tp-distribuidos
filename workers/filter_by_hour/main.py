@@ -179,7 +179,8 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
                     # Send batched messages to each worker
                     for routing_key, worker_rows in rows_by_worker.items():
                         if worker_rows:
-                            new_message, _ = build_message(client_id, type_of_message, 0, worker_rows)
+                            sender = f"filter_by_hour_worker_{WORKER_INDEX}"
+                            new_message, _ = build_message(client_id, type_of_message, 0, worker_rows, sender=sender)
                             filter_by_amount_exchange.send(new_message, routing_key=routing_key)
                             rows_sent_to_amount += len(worker_rows)
                             #print(f"[filter_by_hour] Worker {WORKER_INDEX} client {client_id}: Sent {len(worker_rows)} rows to filter_by_amount {routing_key} (total sent to amount: {client_stats[client_id]['rows_sent_to_amount']}, counter at: {client_stats[client_id]['amount_worker_counter']})")
@@ -205,7 +206,8 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
                     # Send grouped messages by semester
                     for semester_key, semester_rows in rows_by_semester.items():
                         if semester_rows:
-                            semester_message, _ = build_message(client_id, type_of_message, 0, semester_rows)
+                            semester_message, _ = build_message(client_id, type_of_message, 0, semester_rows, sender=f"filter_by_hour_worker_{WORKER_INDEX}")
+                            # Use the semester_key as routing key so messages reach the correct topic subscribers
                             categorizer_q3_topic_exchange.send(semester_message, routing_key=semester_key)
                             rows_sent_to_q3 += len(semester_rows)
                     
@@ -224,14 +226,16 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
                 print(f"[filter_by_hour] Worker {WORKER_INDEX} SUMMARY for client {client_id}: messages_received={stats['messages_received']}, rows_received={stats['rows_received']}, rows_sent_to_amount={stats['rows_sent_to_amount']}, rows_sent_to_q3={stats['rows_sent_to_q3']}" )
                 try:
                     # Send END to filter_by_amount (to all workers) for this specific client
-                    end_message, _ = build_message(client_id, type_of_message, 1, [])
+                    sender = f"filter_by_hour_worker_{WORKER_INDEX}"
+                    end_message, _ = build_message(client_id, type_of_message, 1, [], sender=sender)
                     for i in range(NUMBER_OF_AMOUNT_WORKERS):
                         routing_key = f"transaction.{i}"
                         filter_by_amount_exchange.send(end_message, routing_key=routing_key)
                         print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message for client {client_id} to filter_by_amount worker {i} via topic exchange", flush=True)
                     # Send END to categorizer_q3 topic exchange for all routing keys used for this client
                     for routing_key in client_q3_routing_keys[client_id]:
-                        categorizer_q3_topic_exchange.send(end_message, routing_key=routing_key)
+                        end_message_q3, _ = build_message(client_id, type_of_message, 1, [], sender=sender)
+                        categorizer_q3_topic_exchange.send(end_message_q3, routing_key=routing_key)
                         print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message for client {client_id} to categorizer_q3 topic exchange with routing key {routing_key}", flush=True)
                 except Exception as e:
                     print(f"[filter_by_hour] Worker {WORKER_INDEX} ERROR sending END message for client {client_id}: {e}", flush=True)

@@ -138,7 +138,8 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
                 # Send batched messages to each worker
                 for routing_key, worker_rows in rows_by_worker.items():
                     if worker_rows:
-                        new_message, _ = build_message(client_id, type_of_message, 0, worker_rows)
+                        sender = f"filter_by_year_worker_{WORKER_INDEX}"
+                        new_message, _ = build_message(client_id, type_of_message, 0, worker_rows, sender=sender)
                         hour_filter_exchange.send(new_message, routing_key=routing_key)
 
             # Send to categorizer_q4 workers  
@@ -153,7 +154,8 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
 
             for routing_key, batch_rows in batches.items():
                 if batch_rows:
-                    q4_message, _ = build_message(client_id, type_of_message, 0, batch_rows)
+                    sender = f"filter_by_year_worker_{WORKER_INDEX}"
+                    q4_message, _ = build_message(client_id, type_of_message, 0, batch_rows, sender=sender)
                     categorizer_q4_topic_exchange.send(q4_message, routing_key=routing_key)
 
         if is_last:
@@ -161,7 +163,8 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
             print(f"[filter_by_year] Worker {WORKER_INDEX} received transactions END message from client {client_id} (total END msgs: {client_stats[client_id]['transactions_end_received']})")
             
             # Send END message to all filter_by_hour workers
-            end_message, _ = build_message(client_id, type_of_message, 1, [])
+            sender = f"filter_by_year_worker_{WORKER_INDEX}"
+            end_message, _ = build_message(client_id, type_of_message, 1, [], sender=sender)
             for i in range(NUMBER_OF_HOUR_WORKERS):
                 routing_key = f"hour.{i}"
                 hour_filter_exchange.send(end_message, routing_key=routing_key)
@@ -170,7 +173,7 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
             # Send messages for Q4 workers
             for store_id in range(CATEGORIZER_Q4_WORKERS):
                 routing_key = f"store.{store_id % CATEGORIZER_Q4_WORKERS}"
-                q4_message, _ = build_message(client_id, type_of_message, 1, [])
+                q4_message, _ = build_message(client_id, type_of_message, 1, [], sender=sender)
                 categorizer_q4_topic_exchange.send(q4_message, routing_key=routing_key)
                 print(f"[filter_by_year] Worker {WORKER_INDEX} client {client_id}: Sent END message to categorizer_q4 with routing_key={routing_key}")
                 
@@ -230,7 +233,8 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
         for month, rows in rows_by_month.items():
             if rows != []:
                 client_stats[client_id]['transaction_items_rows_sent_to_q2'] += len(rows)
-                new_message, _ = build_message(client_id, type_of_message, 0, rows)
+                sender = f"filter_by_year_worker_{WORKER_INDEX}"
+                new_message, _ = build_message(client_id, type_of_message, 0, rows, sender=sender)
                 routing_key = f"month.{month}"
                 item_categorizer_exchange.send(new_message, routing_key=routing_key)
 
@@ -238,7 +242,8 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
             client_stats[client_id]['transaction_items_end_received'] += 1
             print(f"[filter_by_year] Worker {WORKER_INDEX} received transaction_items END message from client {client_id} (total END msgs: {client_stats[client_id]['transaction_items_end_received']})")
             
-            end_message, _ = build_message(client_id, type_of_message, is_last, [])
+            sender = f"filter_by_year_worker_{WORKER_INDEX}"
+            end_message, _ = build_message(client_id, type_of_message, is_last, [], sender=sender)
             for month in range(1, 13, 13 // NUMBER_OF_Q2_CATEGORIZER_WORKERS):
                 routing_key = f"month.{month}"
                 item_categorizer_exchange.send(end_message, routing_key=routing_key)

@@ -14,6 +14,13 @@ MIN_AMOUNT = float(os.environ.get('MIN_AMOUNT', 15.0))
 RESULT_QUEUE = os.environ.get('RESULT_QUEUE', 'query1_result_receiver_queue')
 NUMBER_OF_HOUR_WORKERS = int(os.environ.get('NUMBER_OF_HOUR_WORKERS', '3'))
 
+# File to persist last processed message_id per sender
+PERSISTENCE_DIR = "/app/persistence"
+
+def get_persistence_file(sender):
+    """Get the persistence file path for a specific sender"""
+    return f"{PERSISTENCE_DIR}/worker_{WORKER_INDEX}_last_message_sender_{sender}.txt"
+
 # Global counters for debugging
 rows_received = 0
 rows_sent = 0
@@ -42,6 +49,40 @@ def _close_queue(queue):
 def _sigterm_handler(signum, _):
     _close_queue(queue_result)
     _close_queue(topic_middleware)
+
+def load_last_processed_message_id(sender):
+    """Load the last processed message_id from disk for a specific sender"""
+    try:
+        # Create persistence directory if it doesn't exist
+        os.makedirs(PERSISTENCE_DIR, exist_ok=True)
+        
+        persistence_file = get_persistence_file(sender)
+        if os.path.exists(persistence_file):
+            with open(persistence_file, 'r') as f:
+                content = f.read().strip()
+                if content:
+                    print(f"[filter_by_amount] Worker {WORKER_INDEX} loaded last processed message_id from disk for sender {sender}: {content}", flush=True)
+                    return content
+    except Exception as e:
+        print(f"[filter_by_amount] Worker {WORKER_INDEX} ERROR loading last message_id from disk for sender {sender}: {e}", flush=True)
+    
+    print(f"[filter_by_amount] Worker {WORKER_INDEX} no previous message_id found on disk for sender {sender}", flush=True)
+    return None
+
+def save_last_processed_message_id(sender, message_id):
+    """Save the last processed message_id to disk for a specific sender"""
+    try:
+        os.makedirs(PERSISTENCE_DIR, exist_ok=True)
+        
+        persistence_file = get_persistence_file(sender)
+        with open(persistence_file, 'w') as f:
+            f.write(message_id)
+            f.flush()
+            os.fsync(f.fileno()) 
+        
+        print(f"[filter_by_amount] Worker {WORKER_INDEX} saved message_id to disk for sender {sender}: {message_id}", flush=True)
+    except Exception as e:
+        print(f"[filter_by_amount] Worker {WORKER_INDEX} ERROR saving message_id to disk for sender {sender}: {e}", flush=True)
 
 def filter_message_by_amount(parsed_message, min_amount: float) -> list:
     try:
@@ -93,20 +134,38 @@ def on_message_callback(message: bytes, topic_middleware, should_stop, delivery_
         client_id = parsed_message['client_id']
         is_last = parsed_message['is_last']
         
-        # Extract ACK information if available
-        sender_id = parsed_message.get('sender', '')
+        # Extract message_id and sender for persistence
         message_id = parsed_message.get('message_id', '')
+        sender = parsed_message.get('sender', 'unknown')
         
-        # Check for duplicate messages using message_id
+        # Initialize disk persistence tracking per sender if needed
+        if not hasattr(on_message_callback, '_disk_last_message_id_by_sender'):
+            on_message_callback._disk_last_message_id_by_sender = {}
+        
+        # Load last processed message_id from disk for this sender if not loaded yet
+        if sender not in on_message_callback._disk_last_message_id_by_sender:
+            disk_last_message_id = load_last_processed_message_id(sender)
+            on_message_callback._disk_last_message_id_by_sender[sender] = disk_last_message_id
+            print(f"[filter_by_amount] Worker {WORKER_INDEX} initialized disk persistence for sender {sender}", flush=True)
+        
+        # Check if this is a duplicate message from this sender (message we processed before restart)
+        if message_id and message_id == on_message_callback._disk_last_message_id_by_sender[sender]:
+            print(f"[filter_by_amount] Worker {WORKER_INDEX} DUPLICATE message detected from disk persistence for sender {sender}, message_id {message_id} - skipping (container restart recovery)", flush=True)
+            # ACK the duplicate message to avoid reprocessing
+            if delivery_tag and channel:
+                channel.basic_ack(delivery_tag=delivery_tag)
+            return
+        
+        # Check for duplicate messages using in-memory tracking (for same session)
         if message_id and client_id in last_message_processed_by_client:
             if last_message_processed_by_client[client_id] == message_id:
-                print(f"[filter_by_amount] Worker {WORKER_INDEX} DUPLICATE message detected for client {client_id}, message_id {message_id} - skipping", flush=True)
+                print(f"[filter_by_amount] Worker {WORKER_INDEX} DUPLICATE message detected for client {client_id}, message_id {message_id} - skipping (in-memory)", flush=True)
                 # ACK the duplicate message to avoid reprocessing
                 if delivery_tag and channel:
                     channel.basic_ack(delivery_tag=delivery_tag)
                 return
         
-        # Update last processed message_id for this client
+        # Update last processed message_id for this client (in-memory)
         if message_id:
             last_message_processed_by_client[client_id] = message_id
             print(f"[filter_by_amount] Worker {WORKER_INDEX} processing message_id {message_id} for client {client_id}", flush=True)
@@ -129,7 +188,6 @@ def on_message_callback(message: bytes, topic_middleware, should_stop, delivery_
         # Skip if client already completed - check AFTER processing END message
         if client_id in completed_clients:
             print(f"[filter_by_amount] Worker {WORKER_INDEX} ignoring message from already completed client {client_id}")
-            # ACK the message even if skipping to avoid requeue
             if delivery_tag and channel:
                 channel.basic_ack(delivery_tag=delivery_tag)
             return
@@ -138,24 +196,22 @@ def on_message_callback(message: bytes, topic_middleware, should_stop, delivery_
         
         #print(f"[filter_by_amount] Worker {WORKER_INDEX} client {client_id}: {len(filtered_rows)} rows passed amount filter (from {len(parsed_message['rows'])} input rows)")
         
-        # Check if this client has completed (received all END messages)
         client_completed = client_end_messages[client_id] >= NUMBER_OF_HOUR_WORKERS
         
-        # Debug logging for client_1
-        if client_id == "client_1" and is_last:
-            print(f"[filter_by_amount] Worker {WORKER_INDEX} DEBUG client_1: is_last={is_last}, client_completed={client_completed}, end_messages={client_end_messages[client_id]}")
+        #f client_id == "client_1" and is_last:
+            #print(f"[filter_by_amount] Worker {WORKER_INDEX} DEBUG client_1: is_last={is_last}, client_completed={client_completed}, end_messages={client_end_messages[client_id]}")
         
         if filtered_rows or (is_last and client_completed):
             client_stats[client_id]['rows_sent'] += len(filtered_rows)
             
             global queue_result
-            # Reuse connection instead of creating new one each time
             if queue_result is None:
                 queue_result = MessageMiddlewareQueue(RABBITMQ_HOST, RESULT_QUEUE)
             
             # Only send is_last=1 if this client has received all END messages
             final_is_last = 1 if (is_last and client_completed) else 0
-            new_message, _ = build_message(client_id, type_of_message, final_is_last, filtered_rows)
+            sender = f"filter_by_amount_worker_{WORKER_INDEX}"
+            new_message, _ = build_message(client_id, type_of_message, final_is_last, filtered_rows, sender=sender)
             queue_result.send(new_message)
             # Don't close connection after each message - reuse it!
             
@@ -178,7 +234,11 @@ def on_message_callback(message: bytes, topic_middleware, should_stop, delivery_
         # Manual ACK: Only acknowledge after successful processing
         if delivery_tag and channel:
             channel.basic_ack(delivery_tag=delivery_tag)
-            print(f"[filter_by_amount] Worker {WORKER_INDEX} ACK sent for message from client {client_id}", flush=True)
+            print(f"[filter_by_amount] Worker {WORKER_INDEX} ACK sent for message from client {client_id}, sender {sender}", flush=True)
+            
+            # Save message_id to disk after successful processing and ACK
+            if message_id and sender:
+                save_last_processed_message_id(sender, message_id)
             
     except Exception as e:
         print(f"[filter_by_amount] Worker {WORKER_INDEX} ERROR processing message: {e}", flush=True)

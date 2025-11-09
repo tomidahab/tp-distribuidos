@@ -1,1 +1,4 @@
 /data/*
+/persistence/*
+/common/__pycache__/
+/workers/**/__pycache__/
