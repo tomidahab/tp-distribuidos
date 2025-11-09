@@ -61,12 +61,12 @@ def load_last_processed_message_id(sender):
             with open(persistence_file, 'r') as f:
                 content = f.read().strip()
                 if content:
-                    print(f"[filter_by_amount] Worker {WORKER_INDEX} loaded last processed message_id from disk for sender {sender}: {content}", flush=True)
+                    # print(f"[filter_by_amount] Worker {WORKER_INDEX} loaded last processed message_id from disk for sender {sender}: {content}", flush=True)
                     return content
     except Exception as e:
         print(f"[filter_by_amount] Worker {WORKER_INDEX} ERROR loading last message_id from disk for sender {sender}: {e}", flush=True)
     
-    print(f"[filter_by_amount] Worker {WORKER_INDEX} no previous message_id found on disk for sender {sender}", flush=True)
+    # print(f"[filter_by_amount] Worker {WORKER_INDEX} no previous message_id found on disk for sender {sender}", flush=True)
     return None
 
 def save_last_processed_message_id(sender, message_id):
@@ -80,7 +80,7 @@ def save_last_processed_message_id(sender, message_id):
             f.flush()
             os.fsync(f.fileno()) 
         
-        print(f"[filter_by_amount] Worker {WORKER_INDEX} saved message_id to disk for sender {sender}: {message_id}", flush=True)
+        # print(f"[filter_by_amount] Worker {WORKER_INDEX} saved message_id to disk for sender {sender}: {message_id}", flush=True)
     except Exception as e:
         print(f"[filter_by_amount] Worker {WORKER_INDEX} ERROR saving message_id to disk for sender {sender}: {e}", flush=True)
 
@@ -114,7 +114,7 @@ def send_ack(sender_id, message_id):
         ack_message = f"ACK:{message_id}"
         ack_queue.send(ack_message.encode())
         
-        print(f"[filter_by_amount] Worker {WORKER_INDEX} sent ACK to {ack_queue_name} for message {message_id}", flush=True)
+        # print(f"[filter_by_amount] Worker {WORKER_INDEX} sent ACK to {ack_queue_name} for message {message_id}", flush=True)
         
     except Exception as e:
         print(f"[filter_by_amount] Worker {WORKER_INDEX} ERROR sending ACK for message {message_id}: {e}", flush=True)
@@ -231,14 +231,15 @@ def on_message_callback(message: bytes, topic_middleware, should_stop, delivery_
         # if sender_id and message_id:
         #     send_ack(sender_id, message_id)
         
-        # Manual ACK: Only acknowledge after successful processing
+        # CRITICAL: Save message_id to disk AFTER successful message sending to prevent message loss
+        if message_id and sender:
+            save_last_processed_message_id(sender, message_id)
+            print(f"[filter_by_amount] Worker {WORKER_INDEX} saved message_id to disk for sender {sender}: {message_id}", flush=True)
+        
+        # Manual ACK after persistence
         if delivery_tag and channel:
             channel.basic_ack(delivery_tag=delivery_tag)
             print(f"[filter_by_amount] Worker {WORKER_INDEX} ACK sent for message from client {client_id}, sender {sender}", flush=True)
-            
-            # Save message_id to disk after successful processing and ACK
-            if message_id and sender:
-                save_last_processed_message_id(sender, message_id)
             
     except Exception as e:
         print(f"[filter_by_amount] Worker {WORKER_INDEX} ERROR processing message: {e}", flush=True)

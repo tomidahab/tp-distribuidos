@@ -22,6 +22,42 @@ NUMBER_OF_YEAR_WORKERS = int(os.environ.get('NUMBER_OF_YEAR_WORKERS', '3'))
 
 SEMESTER_KEYS_FOR_FANOUT = ['semester.2023-1', 'semester.2024-1', 'semester.2024-2','semester.2025-1']
 
+# File to persist last processed message_id per sender
+PERSISTENCE_DIR = "/app/persistence"
+
+def get_persistence_file(sender):
+    """Get the persistence file path for a specific sender"""
+    return f"{PERSISTENCE_DIR}/worker_{WORKER_INDEX}_last_message_sender_{sender}.txt"
+
+def load_last_processed_message_id(sender):
+    """Load the last processed message_id from disk for a specific sender"""
+    try:
+        persistence_file = get_persistence_file(sender)
+        if os.path.exists(persistence_file):
+            with open(persistence_file, 'r') as f:
+                message_id = f.read().strip()
+                print(f"[filter_by_hour] Worker {WORKER_INDEX} loaded last message_id for sender {sender}: {message_id}", flush=True)
+                return message_id
+        else:
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} no persistence file found for sender {sender}, starting fresh", flush=True)
+            return None
+    except Exception as e:
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} ERROR loading persistence for sender {sender}: {e}", flush=True)
+        return None
+
+def save_last_processed_message_id(sender, message_id):
+    """Save the last processed message_id to disk for a specific sender"""
+    try:
+        # Create persistence directory if it doesn't exist
+        os.makedirs(PERSISTENCE_DIR, exist_ok=True)
+        
+        persistence_file = get_persistence_file(sender)
+        with open(persistence_file, 'w') as f:
+            f.write(message_id)
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} saved message_id to disk for sender {sender}: {message_id}", flush=True)
+    except Exception as e:
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} ERROR saving persistence for sender {sender}: {e}", flush=True)
+
 # Global counters for debugging
 rows_received = 0
 rows_sent_to_amount = 0
@@ -114,10 +150,28 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
         sender_id = parsed_message.get('sender', '')
         message_id = parsed_message.get('message_id', '')
         
+        # Initialize disk persistence tracking per sender if needed
+        if not hasattr(on_message_callback, '_disk_last_message_id_by_sender'):
+            on_message_callback._disk_last_message_id_by_sender = {}
+        
+        # Load last processed message_id from disk for this sender if not loaded yet
+        if sender_id and sender_id not in on_message_callback._disk_last_message_id_by_sender:
+            disk_last_message_id = load_last_processed_message_id(sender_id)
+            on_message_callback._disk_last_message_id_by_sender[sender_id] = disk_last_message_id
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} initialized disk persistence for sender {sender_id}", flush=True)
+        
+        # Check if this is a duplicate message from this sender (message we processed before restart)
+        if message_id and sender_id and message_id == on_message_callback._disk_last_message_id_by_sender.get(sender_id):
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} DUPLICATE message detected from disk persistence for sender {sender_id}, message_id {message_id} - skipping (container restart recovery)", flush=True)
+            # ACK the duplicate message to avoid reprocessing
+            if delivery_tag and channel:
+                channel.basic_ack(delivery_tag=delivery_tag)
+            return
+        
         # Check for duplicate messages using message_id
         if message_id and client_id in last_message_processed_by_client:
             if last_message_processed_by_client[client_id] == message_id:
-                print(f"[filter_by_hour] Worker {WORKER_INDEX} DUPLICATE message detected for client {client_id}, message_id {message_id} - skipping", flush=True)
+                print(f"[filter_by_hour] Worker {WORKER_INDEX} DUPLICATE message detected for client {client_id}, message_id {message_id} - skipping (in-memory)", flush=True)
                 # ACK the duplicate message to avoid reprocessing
                 if delivery_tag and channel:
                     channel.basic_ack(delivery_tag=delivery_tag)
@@ -179,8 +233,8 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
                     # Send batched messages to each worker
                     for routing_key, worker_rows in rows_by_worker.items():
                         if worker_rows:
-                            sender = f"filter_by_hour_worker_{WORKER_INDEX}"
-                            new_message, _ = build_message(client_id, type_of_message, 0, worker_rows, sender=sender)
+                            outgoing_sender = f"filter_by_hour_worker_{WORKER_INDEX}"
+                            new_message, _ = build_message(client_id, type_of_message, 0, worker_rows, sender=outgoing_sender)
                             filter_by_amount_exchange.send(new_message, routing_key=routing_key)
                             rows_sent_to_amount += len(worker_rows)
                             #print(f"[filter_by_hour] Worker {WORKER_INDEX} client {client_id}: Sent {len(worker_rows)} rows to filter_by_amount {routing_key} (total sent to amount: {client_stats[client_id]['rows_sent_to_amount']}, counter at: {client_stats[client_id]['amount_worker_counter']})")
@@ -226,15 +280,15 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
                 print(f"[filter_by_hour] Worker {WORKER_INDEX} SUMMARY for client {client_id}: messages_received={stats['messages_received']}, rows_received={stats['rows_received']}, rows_sent_to_amount={stats['rows_sent_to_amount']}, rows_sent_to_q3={stats['rows_sent_to_q3']}" )
                 try:
                     # Send END to filter_by_amount (to all workers) for this specific client
-                    sender = f"filter_by_hour_worker_{WORKER_INDEX}"
-                    end_message, _ = build_message(client_id, type_of_message, 1, [], sender=sender)
+                    outgoing_sender = f"filter_by_hour_worker_{WORKER_INDEX}"
+                    end_message, _ = build_message(client_id, type_of_message, 1, [], sender=outgoing_sender)
                     for i in range(NUMBER_OF_AMOUNT_WORKERS):
                         routing_key = f"transaction.{i}"
                         filter_by_amount_exchange.send(end_message, routing_key=routing_key)
                         print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message for client {client_id} to filter_by_amount worker {i} via topic exchange", flush=True)
                     # Send END to categorizer_q3 topic exchange for all routing keys used for this client
                     for routing_key in client_q3_routing_keys[client_id]:
-                        end_message_q3, _ = build_message(client_id, type_of_message, 1, [], sender=sender)
+                        end_message_q3, _ = build_message(client_id, type_of_message, 1, [], sender=outgoing_sender)
                         categorizer_q3_topic_exchange.send(end_message_q3, routing_key=routing_key)
                         print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message for client {client_id} to categorizer_q3 topic exchange with routing key {routing_key}", flush=True)
                 except Exception as e:
@@ -242,10 +296,15 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
                     import traceback
                     traceback.print_exc()
         
-        # Manual ACK: Only acknowledge after successful processing
+        # CRITICAL: Save message_id to disk AFTER successful message sending to prevent message loss
+        if message_id and sender_id:
+            save_last_processed_message_id(sender_id, message_id)
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} saved message_id to disk for sender {sender_id}: {message_id}", flush=True)
+        
+        # Manual ACK: Only acknowledge after successful processing and persistence
         if delivery_tag and channel:
             channel.basic_ack(delivery_tag=delivery_tag)
-            #print(f"[filter_by_hour] Worker {WORKER_INDEX} ACK sent for message from client {client_id}", flush=True)
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} ACK sent for message from client {client_id}, sender {sender_id}", flush=True)
             
     except Exception as e:
         print(f"[filter_by_hour] Worker {WORKER_INDEX} ERROR processing message: {e}", flush=True)

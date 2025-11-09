@@ -79,6 +79,8 @@ services:
       - CATEGORIZER_Q4_WORKERS=3
     depends_on:
       - rabbitmq_server
+    volumes:
+      - ./persistence/filter_by_year_worker_0:/app/persistence
 
   filter_by_year_worker_1:
     build:
@@ -103,6 +105,8 @@ services:
       - CATEGORIZER_Q4_WORKERS=3
     depends_on:
       - rabbitmq_server
+    volumes:
+      - ./persistence/filter_by_year_worker_1:/app/persistence
 
   filter_by_year_worker_2:
     build:
@@ -127,6 +131,8 @@ services:
       - CATEGORIZER_Q4_WORKERS=3
     depends_on:
       - rabbitmq_server
+    volumes:
+      - ./persistence/filter_by_year_worker_2:/app/persistence
 
   filter_by_hour_worker_0:
     build:
@@ -147,6 +153,8 @@ services:
       - NUMBER_OF_YEAR_WORKERS=3
     depends_on:
       - rabbitmq_server
+    volumes:
+      - ./persistence/filter_by_hour_worker_0:/app/persistence
 
   filter_by_hour_worker_1:
     build:
@@ -167,6 +175,8 @@ services:
       - NUMBER_OF_YEAR_WORKERS=3
     depends_on:
       - rabbitmq_server
+    volumes:
+      - ./persistence/filter_by_hour_worker_1:/app/persistence
 
   filter_by_hour_worker_2:
     build:
@@ -187,6 +197,8 @@ services:
       - NUMBER_OF_YEAR_WORKERS=3
     depends_on:
       - rabbitmq_server
+    volumes:
+      - ./persistence/filter_by_hour_worker_2:/app/persistence
 
   filter_by_hour_worker_3:
     build:
@@ -207,6 +219,8 @@ services:
       - NUMBER_OF_YEAR_WORKERS=3
     depends_on:
       - rabbitmq_server
+    volumes:
+      - ./persistence/filter_by_hour_worker_3:/app/persistence
 
   filter_by_amount_worker_0:
     build:
