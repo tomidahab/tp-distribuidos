@@ -1,3 +1,5 @@
+from itertools import cycle
+
 FILENAME = "docker-compose.yaml"
 
 CLIENTS = 5
@@ -16,6 +18,9 @@ Q3_SEMESTERS = [
     # "semester.2023-2",
     "semester.2025-1",
 ]
+
+HEALTH_CHECK_LISTENER_PORT = 2000
+
 TARGET_Q3_CATEGORIZERS = min(len(Q3_SEMESTERS), Q3_CATEGORIZERS)
 
 TAB = "  "
@@ -260,21 +265,44 @@ def generate_compose_file():
         # ====================
         # Health Checker
         # ====================
+        def get_checker_nodes_distribution():
+            checkers = [f"health_checker_{i}" for i in range(HEALTH_CHECKERS)]
+            all_nodes = [f"health_checker_{i}" for i in range(HEALTH_CHECKERS)] # TODO: UPDATE TO ALL NODES
+            distribution = {i: [] for i in range(HEALTH_CHECKERS)}
+
+            checkers_cycle = cycle(checkers)
+
+            for node in all_nodes:
+                for _ in range(len(checkers)):
+                    checker = next(checkers_cycle)
+                    if checker != node:
+                        distribution[checkers.index(checker)].append(node + f":{HEALTH_CHECK_LISTENER_PORT}")
+                        break
+                    
+            return distribution
+
+        
+        nodes_per_checker = get_checker_nodes_distribution()
+        
         for i in range(HEALTH_CHECKERS):
-            wln(1, f"health_checker_{i + 1}:")
+            wln(1, f"health_checker_{i}:")
             wln(2, "build:")
             wln(3, "context: .")
             wln(3, "dockerfile: ./workers/health_checker/Dockerfile")
-            wln(2, f"container_name: health_checker_{i + 1}")
+            wln(2, f"container_name: health_checker_{i}")
             wln(2, "environment:")
             wln(3, "- RABBITMQ_HOST=rabbitmq_server")
             wln(3, f"- WORKER_INDEX={i}")
             wln(3, f"- AMOUNT_OF_WORKERS={HEALTH_CHECKERS}")
+            wln(3, f"- HEALTH_ADDRESS_TARGETS={",".join(nodes_per_checker[i])}")
+            wln(2, "ports:")
+            wln(3, f'- "{HEALTH_CHECK_LISTENER_PORT}:{HEALTH_CHECK_LISTENER_PORT}"')
+            wln(2, "networks:")
+            wln(3, f'- tpg_net')
             wln(2, "depends_on:")
             wln(3, "- rabbitmq_server")
             wln(3, "- gateway")
             f.write("\n")
-
 
 if __name__ == "__main__":
     generate_compose_file()
