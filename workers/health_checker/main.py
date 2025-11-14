@@ -25,7 +25,7 @@ def _sigterm_handler(signum, _):
 class HealthCheckReceiver(threading.Thread):
     def __init__(self):
         super().__init__(daemon=True)
-        self.skt = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.skt = socket(AF_INET, SOCK_STREAM)
         self.skt.bind(('', 2000))
         self.skt.listen(1)
 
@@ -46,9 +46,9 @@ class HealthCheckReceiver(threading.Thread):
 
 class HealthCheckerHandler(threading.Thread):
     def __init__(self, addr):
+        super().__init__(daemon=True)
         self.host, self.port = addr
         self.skt = None
-        super().__init__(daemon=True)
 
     def send_health_checks(self):
         while True:
@@ -82,14 +82,19 @@ class HealthCheckerHandler(threading.Thread):
 def main():
     signal.signal(signal.SIGTERM, _sigterm_handler)
     signal.signal(signal.SIGINT, _sigterm_handler)
-
+    cprint(f"Booting Health checker node {WORKER_INDEX}")
     checkers = []
     for addr in HEALTH_ADDRESS_TARGETS:
         host, port = addr.split(":")
-        checkers.append(HealthCheckerHandler((host, int(port))))
+        checker = HealthCheckerHandler((host, int(port)))
+        checker.start()
+        checkers.append(checker)
 
-    for c in checkers:
-        c.join() # This will block the flow since this worker is not suppose to end
+    receiver = HealthCheckReceiver()
+    receiver.start()
+    # for c in checkers:
+    #     c.join() # This will block the flow since this worker is not suppose to end
+    signal.pause()
     
 if __name__ == "__main__":
     main()
