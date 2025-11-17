@@ -1,12 +1,10 @@
 import os
 import signal
 import subprocess
-import sys
-from collections import defaultdict
 import time
 import threading
 from socket import socket, AF_INET, SOCK_STREAM
-from queue import Queue # Thread safe queue
+from common.health_check_receiver import HealthCheckReceiver
 from common.protocol_utils import *
 
 RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', 'rabbitmq_server')
@@ -21,28 +19,6 @@ def cprint(*args, **kwargs):
 
 def _sigterm_handler(signum, _):
     pass
-
-class HealthCheckReceiver(threading.Thread):
-    def __init__(self):
-        super().__init__(daemon=True)
-        self.skt = socket(AF_INET, SOCK_STREAM)
-        self.skt.bind(('', 2000))
-        self.skt.listen(1)
-
-    def handle_checker(self, checker_skt):
-        cprint("Health checker connected, handling messages")        
-        while True:
-            alive_msg = recv_int(checker_skt)
-            send_int(checker_skt, 1)
-    
-    def run(self):            
-        cprint("Start handling health connections")
-        while True:
-            try:
-                c, addr = self.skt.accept()
-                self.handle_checker(c)
-            except ConnectionError:
-                cprint(f"Checker connection lost, reconnection expected...")
 
 class HealthCheckerHandler(threading.Thread):
     def __init__(self, addr):
@@ -92,8 +68,8 @@ def main():
 
     receiver = HealthCheckReceiver()
     receiver.start()
-    # for c in checkers:
-    #     c.join() # This will block the flow since this worker is not suppose to end
+    
+    # This will block the flow since this worker is not suppose to end
     signal.pause()
     
 if __name__ == "__main__":
