@@ -29,6 +29,42 @@ CATEGORIZER_Q4_TOPIC_EXCHANGE = os.environ.get('CATEGORIZER_Q4_TOPIC_EXCHANGE', 
 CATEGORIZER_Q4_FANOUT_EXCHANGE = os.environ.get('CATEGORIZER_Q4_FANOUT_EXCHANGE', 'categorizer_q4_fanout_exchange')
 CATEGORIZER_Q4_WORKERS = int(os.environ.get('CATEGORIZER_Q4_WORKERS', 3))
 
+# File to persist last processed message_id per sender
+PERSISTENCE_DIR = "/app/persistence"
+
+def get_persistence_file(sender):
+    """Get the persistence file path for a specific sender"""
+    return f"{PERSISTENCE_DIR}/worker_{WORKER_INDEX}_last_message_sender_{sender}.txt"
+
+def load_last_processed_message_id(sender):
+    """Load the last processed message_id from disk for a specific sender"""
+    try:
+        persistence_file = get_persistence_file(sender)
+        if os.path.exists(persistence_file):
+            with open(persistence_file, 'r') as f:
+                message_id = f.read().strip()
+                print(f"[filter_by_year] Worker {WORKER_INDEX} loaded last message_id for sender {sender}: {message_id}", flush=True)
+                return message_id
+        else:
+            print(f"[filter_by_year] Worker {WORKER_INDEX} no persistence file found for sender {sender}, starting fresh", flush=True)
+            return None
+    except Exception as e:
+        print(f"[filter_by_year] Worker {WORKER_INDEX} ERROR loading persistence for sender {sender}: {e}", flush=True)
+        return None
+
+def save_last_processed_message_id(sender, message_id):
+    """Save the last processed message_id to disk for a specific sender"""
+    try:
+        # Create persistence directory if it doesn't exist
+        os.makedirs(PERSISTENCE_DIR, exist_ok=True)
+        
+        persistence_file = get_persistence_file(sender)
+        with open(persistence_file, 'w') as f:
+            f.write(message_id)
+        print(f"[filter_by_year] Worker {WORKER_INDEX} saved message_id to disk for sender {sender}: {message_id}", flush=True)
+    except Exception as e:
+        print(f"[filter_by_year] Worker {WORKER_INDEX} ERROR saving persistence for sender {sender}: {e}", flush=True)
+
 receiver_exchange_t = None
 receiver_exchange_t_items = None
 hour_filter_exchange = None
@@ -53,6 +89,11 @@ client_stats = defaultdict(lambda: {
     'q4_message_counter': 0   # Per-client counter for q4 distribution
 })
 
+# Track END messages per client
+end_messages_by_client = defaultdict(int)
+
+# Track detailed stats per client
+
 def _close_queue(queue):
     if queue:
         queue.close()
@@ -70,21 +111,46 @@ def _sigterm_handler(signum, _):
 print(f"[filter_by_year] Worker {WORKER_INDEX} starting with FILTER_YEARS: {FILTER_YEARS}")
 
 
-def on_message_callback_transactions(message: bytes, hour_filter_exchange, categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange):
+def on_message_callback_transactions(message: bytes, hour_filter_exchange, categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange, delivery_tag=None, channel=None):
     global client_stats
     try:
         parsed_message = parse_message(message)
         type_of_message = parsed_message['csv_type']  
         client_id = parsed_message['client_id']
         is_last = parsed_message['is_last']
+
+        # Extract ACK information if available
+        sender_id = parsed_message.get('sender', '')
+        message_id = parsed_message.get('message_id', '')
+
+        # Initialize disk persistence tracking per sender if needed
+        if not hasattr(on_message_callback_transactions, '_disk_last_message_id_by_sender'):
+            on_message_callback_transactions._disk_last_message_id_by_sender = {}
+        
+        # Load last processed message_id from disk for this sender if not loaded yet
+        if sender_id and sender_id not in on_message_callback_transactions._disk_last_message_id_by_sender:
+            disk_last_message_id = load_last_processed_message_id(sender_id)
+            on_message_callback_transactions._disk_last_message_id_by_sender[sender_id] = disk_last_message_id
+            print(f"[filter_by_year] Worker {WORKER_INDEX} initialized disk persistence for sender {sender_id}", flush=True)
+        
+        # Check if this is a duplicate message from this sender (message we processed before restart)
+        if message_id and sender_id and message_id == on_message_callback_transactions._disk_last_message_id_by_sender.get(sender_id):
+            print(f"[filter_by_year] Worker {WORKER_INDEX} DUPLICATE message detected from disk persistence for sender {sender_id}, message_id {message_id} - skipping (container restart recovery)", flush=True)
+            # ACK the duplicate message to avoid reprocessing
+            if delivery_tag and channel:
+                channel.basic_ack(delivery_tag=delivery_tag)
+            return
+
+        # Process message - no in-memory duplicate check by client (removed to avoid conflicts)
+        if message_id:
+            print(f"[filter_by_year] Worker {WORKER_INDEX} processing message_id {message_id} for client {client_id} from sender {sender_id}", flush=True)
+
         new_rows = []
 
         # Update stats
         client_stats[client_id]['transactions_received'] += 1
         client_stats[client_id]['transactions_rows_received'] += len(parsed_message['rows'])
         
-        #print(f"[filter_by_year] Worker {WORKER_INDEX} received transactions message from client {client_id} with {len(parsed_message['rows'])} rows, is_last={is_last} (total msgs: {client_stats[client_id]['transactions_received']}, total rows: {client_stats[client_id]['transactions_rows_received']})")
-
         for row in parsed_message['rows']:
             dic_fields_row = row_to_dict(row, type_of_message)
             try:
@@ -118,9 +184,9 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
                 # Send batched messages to each worker
                 for routing_key, worker_rows in rows_by_worker.items():
                     if worker_rows:
-                        new_message, _ = build_message(client_id, type_of_message, 0, worker_rows)
+                        outgoing_sender = f"filter_by_year_worker_{WORKER_INDEX}"
+                        new_message, _ = build_message(client_id, type_of_message, 0, worker_rows, sender=outgoing_sender)
                         hour_filter_exchange.send(new_message, routing_key=routing_key)
-                        #print(f"[filter_by_year] Worker {WORKER_INDEX} client {client_id}: Sent {len(worker_rows)} rows to filter_by_hour {routing_key} (total sent to hour: {client_stats[client_id]['transactions_rows_sent_to_hour']}, counter at: {client_stats[client_id]['hour_worker_counter']})")
 
             # Send to categorizer_q4 workers  
             batches = defaultdict(list)
@@ -134,8 +200,8 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
 
             for routing_key, batch_rows in batches.items():
                 if batch_rows:
-                    q4_message, _ = build_message(client_id, type_of_message, 0, batch_rows)
-                    #print(f"[filter_by_year] Worker {WORKER_INDEX} client {client_id}: Sending {len(batch_rows)} rows to categorizer_q4 with routing key {routing_key}")
+                    outgoing_sender = f"filter_by_year_worker_{WORKER_INDEX}"
+                    q4_message, _ = build_message(client_id, type_of_message, 0, batch_rows, sender=outgoing_sender)
                     categorizer_q4_topic_exchange.send(q4_message, routing_key=routing_key)
 
         if is_last:
@@ -143,7 +209,8 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
             print(f"[filter_by_year] Worker {WORKER_INDEX} received transactions END message from client {client_id} (total END msgs: {client_stats[client_id]['transactions_end_received']})")
             
             # Send END message to all filter_by_hour workers
-            end_message, _ = build_message(client_id, type_of_message, 1, [])
+            outgoing_sender = f"filter_by_year_worker_{WORKER_INDEX}"
+            end_message, _ = build_message(client_id, type_of_message, 1, [], sender=outgoing_sender)
             for i in range(NUMBER_OF_HOUR_WORKERS):
                 routing_key = f"hour.{i}"
                 hour_filter_exchange.send(end_message, routing_key=routing_key)
@@ -152,7 +219,7 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
             # Send messages for Q4 workers
             for store_id in range(CATEGORIZER_Q4_WORKERS):
                 routing_key = f"store.{store_id % CATEGORIZER_Q4_WORKERS}"
-                q4_message, _ = build_message(client_id, type_of_message, 1, [])
+                q4_message, _ = build_message(client_id, type_of_message, 1, [], sender=outgoing_sender)
                 categorizer_q4_topic_exchange.send(q4_message, routing_key=routing_key)
                 print(f"[filter_by_year] Worker {WORKER_INDEX} client {client_id}: Sent END message to categorizer_q4 with routing_key={routing_key}")
                 
@@ -160,17 +227,23 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
             stats = client_stats[client_id]
             print(f"[filter_by_year] Worker {WORKER_INDEX} SUMMARY for client {client_id}: transactions_received={stats['transactions_received']}, transactions_rows_received={stats['transactions_rows_received']}, transactions_rows_sent_to_hour={stats['transactions_rows_sent_to_hour']}, transactions_rows_sent_to_q4={stats['transactions_rows_sent_to_q4']}")
 
-            # Using topic instead of fanout so do not use the next code
-            # end_message, _ = build_message(client_id, type_of_message, 1, [])
-            # hour_filter_queue.send(end_message)
-            # print("[filter_by_year] Sent END message to categorizer_q4 via fanout exchange.")
-            # categorizer_q4_fanout_exchange.send(end_message)
-            # print("[filter_by_year] Sent END message to hour filter queue.")
-
     except Exception as e:
         print(f"[transactions] Worker {WORKER_INDEX} Error decoding message: {e}", file=sys.stderr)
+        if delivery_tag and channel:
+            channel.basic_nack(delivery_tag=delivery_tag, requeue=True)
+        return
 
-def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_categorizer_fanout_exchange):
+    # CRITICAL: Save message_id to disk AFTER successful message sending to prevent message loss
+    if message_id and sender_id:
+        save_last_processed_message_id(sender_id, message_id)
+        print(f"[filter_by_year] Worker {WORKER_INDEX} saved message_id to disk for sender {sender_id}: {message_id}", flush=True)
+    
+    # Manual ACK: Only acknowledge after successful processing and persistence
+    if delivery_tag and channel:
+        channel.basic_ack(delivery_tag=delivery_tag)
+        print(f"[filter_by_year] Worker {WORKER_INDEX} ACK sent for TRANSACTIONS message from client {client_id}, sender {sender_id}", flush=True)
+
+def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_categorizer_fanout_exchange, delivery_tag=None, channel=None):
     global client_stats
     try:
         parsed_message = parse_message(message)
@@ -178,11 +251,35 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
         client_id = parsed_message['client_id']
         is_last = parsed_message['is_last']
 
+        # Extract ACK information if available
+        sender_id = parsed_message.get('sender', '')
+        message_id = parsed_message.get('message_id', '')
+
+        # Initialize disk persistence tracking per sender if needed
+        if not hasattr(on_message_callback_t_items, '_disk_last_message_id_by_sender'):
+            on_message_callback_t_items._disk_last_message_id_by_sender = {}
+        
+        # Load last processed message_id from disk for this sender if not loaded yet
+        if sender_id and sender_id not in on_message_callback_t_items._disk_last_message_id_by_sender:
+            disk_last_message_id = load_last_processed_message_id(sender_id)
+            on_message_callback_t_items._disk_last_message_id_by_sender[sender_id] = disk_last_message_id
+            print(f"[filter_by_year] Worker {WORKER_INDEX} initialized disk persistence for T_ITEMS sender {sender_id}", flush=True)
+        
+        # Check if this is a duplicate message from this sender (message we processed before restart)
+        if message_id and sender_id and message_id == on_message_callback_t_items._disk_last_message_id_by_sender.get(sender_id):
+            print(f"[filter_by_year] Worker {WORKER_INDEX} DUPLICATE T_ITEMS message detected from disk persistence for sender {sender_id}, message_id {message_id} - skipping (container restart recovery)", flush=True)
+            # ACK the duplicate message to avoid reprocessing
+            if delivery_tag and channel:
+                channel.basic_ack(delivery_tag=delivery_tag)
+            return
+
+        # Process message - no in-memory duplicate check by client (removed to avoid conflicts)
+        if message_id:
+            print(f"[filter_by_year] Worker {WORKER_INDEX} processing t_items message_id {message_id} for client {client_id} from sender {sender_id}", flush=True)
+
         # Update stats
         client_stats[client_id]['transaction_items_received'] += 1
         client_stats[client_id]['transaction_items_rows_received'] += len(parsed_message['rows'])
-
-        #print(f"[filter_by_year] Worker {WORKER_INDEX} received transaction_items message from client {client_id} with {len(parsed_message['rows'])} rows, is_last={is_last} (total msgs: {client_stats[client_id]['transaction_items_received']}, total rows: {client_stats[client_id]['transaction_items_rows_received']})")
 
         rows_by_month = defaultdict(list)
         for row in parsed_message['rows']:
@@ -199,18 +296,17 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
         for month, rows in rows_by_month.items():
             if rows != []:
                 client_stats[client_id]['transaction_items_rows_sent_to_q2'] += len(rows)
-                new_message, _ = build_message(client_id, type_of_message, 0, rows)
+                outgoing_sender = f"filter_by_year_worker_{WORKER_INDEX}"
+                new_message, _ = build_message(client_id, type_of_message, 0, rows, sender=outgoing_sender)
                 routing_key = f"month.{month}"
-                #print(f"[filter_by_year] Worker {WORKER_INDEX} client {client_id}: Sending {len(rows)} rows for month {month} to categorizer_q2 with routing key {routing_key} (total sent to q2: {client_stats[client_id]['transaction_items_rows_sent_to_q2']})")
                 item_categorizer_exchange.send(new_message, routing_key=routing_key)
 
         if is_last == 1:
             client_stats[client_id]['transaction_items_end_received'] += 1
             print(f"[filter_by_year] Worker {WORKER_INDEX} received transaction_items END message from client {client_id} (total END msgs: {client_stats[client_id]['transaction_items_end_received']})")
             
-            end_message, _ = build_message(client_id, type_of_message, is_last, [])
-            # Send END message to all months (1-12) to ensure all categorizer_q2 workers receive it
-            # Sending this with (1, 13) range will make a categorizer receive the 3 messages that need to pass
+            outgoing_sender = f"filter_by_year_worker_{WORKER_INDEX}"
+            end_message, _ = build_message(client_id, type_of_message, is_last, [], sender=outgoing_sender)
             for month in range(1, 13, 13 // NUMBER_OF_Q2_CATEGORIZER_WORKERS):
                 routing_key = f"month.{month}"
                 item_categorizer_exchange.send(end_message, routing_key=routing_key)
@@ -219,8 +315,22 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
             # Print summary stats for this client
             stats = client_stats[client_id]
             print(f"[filter_by_year] Worker {WORKER_INDEX} T_ITEMS SUMMARY for client {client_id}: transaction_items_received={stats['transaction_items_received']}, transaction_items_rows_received={stats['transaction_items_rows_received']}, transaction_items_rows_sent_to_q2={stats['transaction_items_rows_sent_to_q2']}")
+
     except Exception as e:
         print(f"[t_items] Worker {WORKER_INDEX} Error decoding message: {e}", file=sys.stderr)
+        if delivery_tag and channel:
+            channel.basic_nack(delivery_tag=delivery_tag, requeue=True)
+        return
+
+    # CRITICAL: Save message_id to disk AFTER successful message sending to prevent message loss
+    if message_id and sender_id:
+        save_last_processed_message_id(sender_id, message_id)
+        print(f"[filter_by_year] Worker {WORKER_INDEX} saved message_id to disk for sender {sender_id}: {message_id}", flush=True)
+    
+    # Manual ACK
+    if delivery_tag and channel:
+        channel.basic_ack(delivery_tag=delivery_tag)
+        print(f"[filter_by_year] Worker {WORKER_INDEX} ACK sent for T_ITEMS message from client {client_id}, sender {sender_id}", flush=True)
 
 def main():
     global receiver_exchange_t
@@ -318,25 +428,24 @@ def main():
         nonlocal transactions_end_received
         print(f"[filter_by_year] Worker {WORKER_INDEX} Starting transactions consumer...")
         
-        def on_transactions_message(message: bytes):
+        def wrapper(body, delivery_tag, channel):
             nonlocal transactions_end_received
             try:
-                parsed_message = parse_message(message)
-                is_last = parsed_message['is_last']
-                
+                # Parse to check END flag for logging
+                parsed_message = parse_message(body)
+                is_last = parsed_message.get('is_last')
                 if is_last:
                     transactions_end_received += 1
-                    parsed_msg = parse_message(message)
-                    client_id = parsed_msg['client_id']
+                    client_id = parsed_message.get('client_id')
                     print(f"[filter_by_year] Worker {WORKER_INDEX} received transactions END message {transactions_end_received} from client {client_id}")
-                    # Don't stop consuming - keep processing messages from multiple clients
-                
-                on_message_callback_transactions(message, hour_filter_exchange, categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange)
+
+                # Call processing function that handles ACK/NACK
+                on_message_callback_transactions(body, hour_filter_exchange, categorizer_q4_topic_exchange, categorizer_q4_fanout_exchange, delivery_tag=delivery_tag, channel=channel)
             except Exception as e:
                 print(f"[filter_by_year] Worker {WORKER_INDEX} Error in transactions callback: {e}", file=sys.stderr)
-        
+
         try:
-            receiver_exchange_t.start_consuming(on_transactions_message)
+            receiver_exchange_t.start_consuming(wrapper, auto_ack=False)
         except Exception as e:
             print(f"[filter_by_year] Worker {WORKER_INDEX} Error consuming transactions: {e}", file=sys.stderr)
     
@@ -345,26 +454,25 @@ def main():
         nonlocal transaction_items_end_received
         print(f"[filter_by_year] Worker {WORKER_INDEX} Starting transaction_items consumer...")
         
-        def on_transaction_items_message(message: bytes):
+        def wrapper(body, delivery_tag, channel):
             nonlocal transaction_items_end_received
             try:
-                parsed_message = parse_message(message)
-                is_last = parsed_message['is_last']
-                
-                # Always process the message first
-                on_message_callback_t_items(message, item_categorizer_exchange, item_categorizer_fanout_exchange)
-                
+                parsed_message = parse_message(body)
+                is_last = parsed_message.get('is_last')
+
+                # Call processing function that handles ACK/NACK
+                on_message_callback_t_items(body, item_categorizer_exchange, item_categorizer_fanout_exchange, delivery_tag=delivery_tag, channel=channel)
+
                 if is_last:
                     transaction_items_end_received += 1
-                    client_id = parsed_message['client_id']
+                    client_id = parsed_message.get('client_id')
                     print(f"[filter_by_year] Worker {WORKER_INDEX} received transaction_items END message {transaction_items_end_received} from client {client_id}")
-                    # Don't stop consuming - keep processing messages from multiple clients
-                
+
             except Exception as e:
                 print(f"[filter_by_year] Worker {WORKER_INDEX} Error in transaction_items callback: {e}", file=sys.stderr)
-        
+
         try:
-            receiver_exchange_t_items.start_consuming(on_transaction_items_message)
+            receiver_exchange_t_items.start_consuming(wrapper, auto_ack=False)
         except Exception as e:
             print(f"[filter_by_year] Worker {WORKER_INDEX} Error consuming transaction_items: {e}", file=sys.stderr)
     

@@ -37,27 +37,47 @@ class MessageMiddleware(ABC):
         except Exception as e:
             raise MessageMiddlewareDisconnectedError(f"Could not connect to RabbitMQ: {e}")
 
-    def start_consuming(self, on_message_callback):
+    def start_consuming(self, on_message_callback, auto_ack=True):
         if not self.channel:
             raise MessageMiddlewareDisconnectedError("No channel to consume from.")
 
-        def callback(ch, method, properties, body):
-            try:
-                on_message_callback(body)
-                ch.basic_ack(delivery_tag=method.delivery_tag)
-            except Exception as e:
-                ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
-                raise MessageMiddlewareMessageError(f"Error in message callback: {e}")
+        if auto_ack:
+            def callback(ch, method, properties, body):
+                try:
+                    on_message_callback(body)
+                    ch.basic_ack(delivery_tag=method.delivery_tag)
+                except Exception as e:
+                    ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+                    raise MessageMiddlewareMessageError(f"Error in message callback: {e}")
+        else:
+            # Manual ACK mode: pass delivery_tag to callback for manual acknowledgment
+            def callback(ch, method, properties, body):
+                try:
+                    on_message_callback(body, method.delivery_tag, ch)
+                except Exception as e:
+                    ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+                    raise MessageMiddlewareMessageError(f"Error in message callback: {e}")
 
         self.consuming = True
         try:
             self.channel.basic_qos(prefetch_count=1)
-            self.channel.basic_consume(queue=self.queue_name, on_message_callback=callback)
+            self.channel.basic_consume(queue=self.queue_name, on_message_callback=callback, auto_ack=False)
             self.channel.start_consuming()
         except pika.exceptions.AMQPConnectionError:
             raise MessageMiddlewareDisconnectedError("Lost connection to RabbitMQ.")
         except Exception as e:
             raise MessageMiddlewareMessageError(f"Error while consuming: {e}")
+
+    def manual_ack(self, delivery_tag):
+        """Manually acknowledge a message"""
+        if not self.channel:
+            raise MessageMiddlewareDisconnectedError("No channel to ack to.")
+        try:
+            self.channel.basic_ack(delivery_tag=delivery_tag)
+        except pika.exceptions.AMQPConnectionError:
+            raise MessageMiddlewareDisconnectedError("Lost connection to RabbitMQ.")
+        except Exception as e:
+            raise MessageMiddlewareMessageError(f"Error sending manual ack: {e}")
 
     def stop_consuming(self):
         if self.channel and self.consuming:
@@ -66,6 +86,34 @@ class MessageMiddleware(ABC):
                 self.consuming = False
             except pika.exceptions.AMQPConnectionError:
                 raise MessageMiddlewareDisconnectedError("Lost connection to RabbitMQ.")
+
+    def receive_with_timeout(self, timeout_seconds):
+        """Receive a single message with timeout. Returns message or None if timeout."""
+        if not self.channel:
+            raise MessageMiddlewareDisconnectedError("No channel to receive from.")
+        
+        import time
+        start_time = time.time()
+        
+        try:
+            # Use get method for single message retrieval
+            method, properties, body = self.channel.basic_get(queue=self.queue_name, auto_ack=True)
+            if method:
+                return body
+            
+            # If no message immediately available, wait and retry
+            while time.time() - start_time < timeout_seconds:
+                time.sleep(0.1)
+                method, properties, body = self.channel.basic_get(queue=self.queue_name, auto_ack=True)
+                if method:
+                    return body
+                    
+            return None  # Timeout
+            
+        except pika.exceptions.AMQPConnectionError:
+            raise MessageMiddlewareDisconnectedError("Lost connection to RabbitMQ.")
+        except Exception as e:
+            raise MessageMiddlewareMessageError(f"Error receiving message: {e}")
 
     def send(self, message):
         if not self.channel:
