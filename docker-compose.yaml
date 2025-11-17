@@ -466,3 +466,63 @@ services:
       - rabbitmq_server
       - gateway
 
+  health_checker_0:
+    build:
+      context: .
+      dockerfile: ./workers/health_checker/Dockerfile
+    container_name: health_checker_0
+    environment:
+      - RABBITMQ_HOST=rabbitmq_server
+      - WORKER_INDEX=0
+      - AMOUNT_OF_WORKERS=3
+      - HEALTH_ADDRESS_TARGETS=health_checker_2:2000
+    networks:
+      - tpg_net
+    depends_on:
+      - rabbitmq_server
+      - gateway
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  health_checker_1:
+    build:
+      context: .
+      dockerfile: ./workers/health_checker/Dockerfile
+    container_name: health_checker_1
+    environment:
+      - RABBITMQ_HOST=rabbitmq_server
+      - WORKER_INDEX=1
+      - AMOUNT_OF_WORKERS=3
+      - HEALTH_ADDRESS_TARGETS=health_checker_0:2000
+    networks:
+      - tpg_net
+    depends_on:
+      - rabbitmq_server
+      - gateway
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  health_checker_2:
+    build:
+      context: .
+      dockerfile: ./workers/health_checker/Dockerfile
+    container_name: health_checker_2
+    environment:
+      - RABBITMQ_HOST=rabbitmq_server
+      - WORKER_INDEX=2
+      - AMOUNT_OF_WORKERS=3
+      - HEALTH_ADDRESS_TARGETS=health_checker_1:2000
+    networks:
+      - tpg_net
+    depends_on:
+      - rabbitmq_server
+      - gateway
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+networks:
+  tpg_net:
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.25.125.0/24
