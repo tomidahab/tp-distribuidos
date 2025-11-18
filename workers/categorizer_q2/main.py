@@ -5,6 +5,7 @@ from collections import defaultdict
 import time
 from datetime import datetime
 
+from common.health_check_receiver import HealthCheckReceiver
 from common.protocol import create_response_message
 from common import config
 # Debug imports
@@ -294,6 +295,10 @@ def send_results_to_gateway(results):
 def main():
     signal.signal(signal.SIGTERM, _sigterm_handler)
     signal.signal(signal.SIGINT, _sigterm_handler)
+
+    health_check_receiver = HealthCheckReceiver()
+    health_check_receiver.start()
+
     try:
         print("[categorizer_q2] Waiting for RabbitMQ to be ready...")
         time.sleep(30)  # Esperar a que RabbitMQ esté listo

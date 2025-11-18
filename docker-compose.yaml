@@ -15,6 +15,8 @@ services:
       - NUMBER_OF_BIRTHDAY_MAPPERS=3
     ports:
       - "5000:5000"
+    networks:
+      - tpg_net
     depends_on:
       - rabbitmq_server
     volumes:
@@ -26,6 +28,8 @@ services:
     ports:
       - "5672:5672"
       - "15672:15672"
+    networks:
+      - tpg_net
     healthcheck:
       test: ["CMD", "rabbitmq_server-diagnostics", "ping"]
       interval: 30s
@@ -39,6 +43,8 @@ services:
     container_name: client_1
     environment:
       - CLIENT_ID=client_1
+    networks:
+      - tpg_net
     depends_on:
       - gateway
     volumes:
@@ -51,6 +57,8 @@ services:
     container_name: client_2
     environment:
       - CLIENT_ID=client_2
+    networks:
+      - tpg_net
     depends_on:
       - gateway
     volumes:
@@ -77,6 +85,8 @@ services:
       - CATEGORIZER_Q4_TOPIC_EXCHANGE=categorizer_q4_topic_exchange
       - CATEGORIZER_Q4_FANOUT_EXCHANGE=categorizer_q4_fanout_exchange
       - CATEGORIZER_Q4_WORKERS=3
+    networks:
+      - tpg_net
     depends_on:
       - rabbitmq_server
     volumes:
@@ -103,6 +113,8 @@ services:
       - CATEGORIZER_Q4_TOPIC_EXCHANGE=categorizer_q4_topic_exchange
       - CATEGORIZER_Q4_FANOUT_EXCHANGE=categorizer_q4_fanout_exchange
       - CATEGORIZER_Q4_WORKERS=3
+    networks:
+      - tpg_net
     depends_on:
       - rabbitmq_server
     volumes:
@@ -129,6 +141,8 @@ services:
       - CATEGORIZER_Q4_TOPIC_EXCHANGE=categorizer_q4_topic_exchange
       - CATEGORIZER_Q4_FANOUT_EXCHANGE=categorizer_q4_fanout_exchange
       - CATEGORIZER_Q4_WORKERS=3
+    networks:
+      - tpg_net
     depends_on:
       - rabbitmq_server
     volumes:
@@ -151,6 +165,8 @@ services:
       - NUMBER_OF_AMOUNT_WORKERS=2
       - NUMBER_OF_HOUR_WORKERS=4
       - NUMBER_OF_YEAR_WORKERS=3
+    networks:
+      - tpg_net
     depends_on:
       - rabbitmq_server
     volumes:
@@ -173,6 +189,8 @@ services:
       - NUMBER_OF_AMOUNT_WORKERS=2
       - NUMBER_OF_HOUR_WORKERS=4
       - NUMBER_OF_YEAR_WORKERS=3
+    networks:
+      - tpg_net
     depends_on:
       - rabbitmq_server
     volumes:
@@ -195,6 +213,8 @@ services:
       - NUMBER_OF_AMOUNT_WORKERS=2
       - NUMBER_OF_HOUR_WORKERS=4
       - NUMBER_OF_YEAR_WORKERS=3
+    networks:
+      - tpg_net
     depends_on:
       - rabbitmq_server
     volumes:
@@ -217,6 +237,8 @@ services:
       - NUMBER_OF_AMOUNT_WORKERS=2
       - NUMBER_OF_HOUR_WORKERS=4
       - NUMBER_OF_YEAR_WORKERS=3
+    networks:
+      - tpg_net
     depends_on:
       - rabbitmq_server
     volumes:
@@ -234,6 +256,8 @@ services:
       - MIN_AMOUNT=75.0
       - RESULT_QUEUE=query1_result_receiver_queue
       - NUMBER_OF_HOUR_WORKERS=4
+    networks:
+      - tpg_net
     depends_on:
       - rabbitmq_server
     volumes:
@@ -251,6 +275,8 @@ services:
       - MIN_AMOUNT=75.0
       - RESULT_QUEUE=query1_result_receiver_queue
       - NUMBER_OF_HOUR_WORKERS=4
+    networks:
+      - tpg_net
     depends_on:
       - rabbitmq_server
     volumes:
@@ -272,6 +298,8 @@ services:
       - WORKER_INDEX=0
       - TOTAL_WORKERS=3
       - NUMBER_OF_YEAR_WORKERS=3
+    networks:
+      - tpg_net
     depends_on:
       - rabbitmq_server
       - gateway
@@ -292,6 +320,8 @@ services:
       - WORKER_INDEX=1
       - TOTAL_WORKERS=3
       - NUMBER_OF_YEAR_WORKERS=3
+    networks:
+      - tpg_net
     depends_on:
       - rabbitmq_server
       - gateway
@@ -312,6 +342,8 @@ services:
       - WORKER_INDEX=2
       - TOTAL_WORKERS=3
       - NUMBER_OF_YEAR_WORKERS=3
+    networks:
+      - tpg_net
     depends_on:
       - rabbitmq_server
       - gateway
@@ -329,6 +361,8 @@ services:
       - GATEWAY_QUEUE=query3_result_receiver_queue
       - NUMBER_OF_HOUR_WORKERS=4
       - ASSIGNED_SEMESTERS=semester.2024-1
+    networks:
+      - tpg_net
     depends_on:
       - rabbitmq_server
     volumes:
@@ -347,6 +381,8 @@ services:
       - GATEWAY_QUEUE=query3_result_receiver_queue
       - NUMBER_OF_HOUR_WORKERS=4
       - ASSIGNED_SEMESTERS=semester.2025-1
+    networks:
+      - tpg_net
     depends_on:
       - rabbitmq_server
     volumes:
@@ -367,6 +403,8 @@ services:
       - AMOUNT_OF_WORKERS=3
       - CATEGORIZER_Q4_WORKERS=3
       - WORKER_INDEX=0
+    networks:
+      - tpg_net
     depends_on:
       - rabbitmq_server
       - gateway
@@ -386,6 +424,8 @@ services:
       - AMOUNT_OF_WORKERS=3
       - CATEGORIZER_Q4_WORKERS=3
       - WORKER_INDEX=1
+    networks:
+      - tpg_net
     depends_on:
       - rabbitmq_server
       - gateway
@@ -405,6 +445,8 @@ services:
       - AMOUNT_OF_WORKERS=3
       - CATEGORIZER_Q4_WORKERS=3
       - WORKER_INDEX=2
+    networks:
+      - tpg_net
     depends_on:
       - rabbitmq_server
       - gateway
@@ -424,6 +466,8 @@ services:
       - BIRTHDAY_MAPPERS=3
       - BIRTHDAY_DICT_QUEUE=birthday_dictionary_queue
       - NUMBER_OF_YEAR_WORKERS=3
+    networks:
+      - tpg_net
     depends_on:
       - rabbitmq_server
       - gateway
@@ -443,6 +487,8 @@ services:
       - BIRTHDAY_MAPPERS=3
       - BIRTHDAY_DICT_QUEUE=birthday_dictionary_queue
       - NUMBER_OF_YEAR_WORKERS=3
+    networks:
+      - tpg_net
     depends_on:
       - rabbitmq_server
       - gateway
@@ -462,6 +508,8 @@ services:
       - BIRTHDAY_MAPPERS=3
       - BIRTHDAY_DICT_QUEUE=birthday_dictionary_queue
       - NUMBER_OF_YEAR_WORKERS=3
+    networks:
+      - tpg_net
     depends_on:
       - rabbitmq_server
       - gateway
@@ -475,7 +523,7 @@ services:
       - RABBITMQ_HOST=rabbitmq_server
       - WORKER_INDEX=0
       - AMOUNT_OF_WORKERS=3
-      - HEALTH_ADDRESS_TARGETS=health_checker_2:2000
+      - HEALTH_ADDRESS_TARGETS=filter_by_year_worker_0:2000,filter_by_hour_worker_0:2000,filter_by_hour_worker_3:2000,categorizer_q2_worker_1:2000,categorizer_q3_worker_1:2000,birthday_dictionary_worker_1:2000,categorizer_q4_worker_2:2000,health_checker_1:2000
     networks:
       - tpg_net
     depends_on:
@@ -493,7 +541,7 @@ services:
       - RABBITMQ_HOST=rabbitmq_server
       - WORKER_INDEX=1
       - AMOUNT_OF_WORKERS=3
-      - HEALTH_ADDRESS_TARGETS=health_checker_0:2000
+      - HEALTH_ADDRESS_TARGETS=filter_by_year_worker_1:2000,filter_by_hour_worker_1:2000,filter_by_amount_worker_0:2000,categorizer_q2_worker_2:2000,categorizer_q3_worker_2:2000,birthday_dictionary_worker_2:2000,categorizer_q4_worker_3:2000,health_checker_2:2000
     networks:
       - tpg_net
     depends_on:
@@ -511,7 +559,7 @@ services:
       - RABBITMQ_HOST=rabbitmq_server
       - WORKER_INDEX=2
       - AMOUNT_OF_WORKERS=3
-      - HEALTH_ADDRESS_TARGETS=health_checker_1:2000
+      - HEALTH_ADDRESS_TARGETS=filter_by_year_worker_2:2000,filter_by_hour_worker_2:2000,filter_by_amount_worker_1:2000,categorizer_q2_worker_3:2000,birthday_dictionary_worker_0:2000,categorizer_q4_worker_1:2000,health_checker_0:2000
     networks:
       - tpg_net
     depends_on:

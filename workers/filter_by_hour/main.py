@@ -5,6 +5,7 @@ import time
 import sys
 from collections import defaultdict
 
+from common.health_check_receiver import HealthCheckReceiver
 from common.protocol import parse_message, row_to_dict, build_message, CSV_TYPES_REVERSE
 from common.middleware import MessageMiddlewareQueue, MessageMiddlewareExchange, MessageMiddlewareDisconnectedError, MessageMiddlewareMessageError
 
@@ -314,6 +315,10 @@ def main():
     import threading
     signal.signal(signal.SIGTERM, _sigterm_handler)
     signal.signal(signal.SIGINT, _sigterm_handler)
+    
+    health_check_receiver = HealthCheckReceiver()
+    health_check_receiver.start()
+
     # Global counters for debugging
     global rows_received, rows_sent_to_amount, rows_sent_to_q3
     rows_received = 0

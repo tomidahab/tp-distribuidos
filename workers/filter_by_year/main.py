@@ -8,6 +8,7 @@ from common.protocol import parse_message, row_to_dict, build_message
 from common.middleware import MessageMiddlewareQueue, MessageMiddlewareExchange, MessageMiddlewareDisconnectedError, MessageMiddlewareMessageError
 import common.config as config
 from collections import defaultdict
+from common.health_check_receiver import HealthCheckReceiver
 
 # Configurable parameters (could be set via env vars or args)
 RABBITMQ_HOST = os.environ.get('RABBITMQ_HOST', os.environ.get('rabbitmq_server_HOST', 'rabbitmq_server'))
@@ -346,6 +347,9 @@ def main():
     signal.signal(signal.SIGTERM, _sigterm_handler)
     signal.signal(signal.SIGINT, _sigterm_handler)
     
+    health_check_receiver = HealthCheckReceiver()
+    health_check_receiver.start()
+
     print(f"[filter_by_year] Worker {WORKER_INDEX} starting...")
     sleep(config.MIDDLEWARE_UP_TIME)  
     print(f"[filter_by_year] Worker {WORKER_INDEX} Connecting to RabbitMQ at {RABBITMQ_HOST}, exchanges: {RECEIVER_EXCHANGE_T}, {RECEIVER_EXCHANGE_T_ITEMS}, filter years: {FILTER_YEARS}")

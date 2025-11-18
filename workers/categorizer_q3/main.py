@@ -5,6 +5,7 @@ from collections import defaultdict
 import time
 from datetime import datetime
 from common import config
+from common.health_check_receiver import HealthCheckReceiver
 # Debug startup
 print("[categorizer_q3] STARTING UP - Basic imports done", flush=True)
 
@@ -226,6 +227,10 @@ def send_results_to_gateway(semester_store_stats):
 def main():
     signal.signal(signal.SIGTERM, _sigterm_handler)
     signal.signal(signal.SIGINT, _sigterm_handler)
+
+    health_check_receiver = HealthCheckReceiver()
+    health_check_receiver.start()
+
     print("[categorizer_q3] MAIN FUNCTION STARTED", flush=True)
     try:
         print("[categorizer_q3] Waiting for RabbitMQ to be ready...", flush=True)

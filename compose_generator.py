@@ -52,6 +52,8 @@ def generate_compose_file():
         wln(3, f"- NUMBER_OF_BIRTHDAY_MAPPERS={BIRTHDAY_MAPPERS}")
         wln(2, "ports:")
         wln(3, '- "5000:5000"')
+        wln(2, "networks:")
+        wln(3, f'- tpg_net')
         wln(2, "depends_on:")
         wln(3, "- rabbitmq_server")
         wln(2, "volumes:")
@@ -67,6 +69,8 @@ def generate_compose_file():
         wln(2, "ports:")
         wln(3, '- "5672:5672"')
         wln(3, '- "15672:15672"')
+        wln(2, "networks:")
+        wln(3, f'- tpg_net')
         wln(2, "healthcheck:")
         wln(3, 'test: ["CMD", "rabbitmq_server-diagnostics", "ping"]')
         wln(3, "interval: 30s")
@@ -85,6 +89,8 @@ def generate_compose_file():
             wln(2, f"container_name: client_{i}")
             wln(2, "environment:")
             wln(3, f"- CLIENT_ID=client_{i}")
+            wln(2, "networks:")
+            wln(3, f'- tpg_net')
             wln(2, "depends_on:")
             wln(3, "- gateway")
             wln(2, "volumes:")
@@ -116,8 +122,12 @@ def generate_compose_file():
             wln(3, "- CATEGORIZER_Q4_TOPIC_EXCHANGE=categorizer_q4_topic_exchange")
             wln(3, "- CATEGORIZER_Q4_FANOUT_EXCHANGE=categorizer_q4_fanout_exchange")
             wln(3, f"- CATEGORIZER_Q4_WORKERS={Q4_CATEGORIZERS}")
+            wln(2, "networks:")
+            wln(3, f'- tpg_net')
             wln(2, "depends_on:")
             wln(3, "- rabbitmq_server")
+            wln(2, "volumes:")
+            wln(3, f"- ./persistence/filter_by_year_worker_{i}:/app/persistence")
             f.write("\n")
 
         # ====================
@@ -141,8 +151,12 @@ def generate_compose_file():
             wln(3, f"- NUMBER_OF_AMOUNT_WORKERS={AMOUNT_FILTERS}")
             wln(3, f"- NUMBER_OF_HOUR_WORKERS={HOUR_FILTERS}")
             wln(3, f"- NUMBER_OF_YEAR_WORKERS={YEAR_FILTERS}")
+            wln(2, "networks:")
+            wln(3, f'- tpg_net')
             wln(2, "depends_on:")
             wln(3, "- rabbitmq_server")
+            wln(2, "volumes:")
+            wln(3, f"- ./persistence/filter_by_hour_worker_{i}:/app/persistence")
             f.write("\n")
 
         # ====================
@@ -161,8 +175,12 @@ def generate_compose_file():
             wln(3, "- MIN_AMOUNT=75.0")
             wln(3, "- RESULT_QUEUE=query1_result_receiver_queue")
             wln(3, f"- NUMBER_OF_HOUR_WORKERS={HOUR_FILTERS}")
+            wln(2, "networks:")
+            wln(3, f'- tpg_net')
             wln(2, "depends_on:")
             wln(3, "- rabbitmq_server")
+            wln(2, "volumes:")
+            wln(3, f"- ./persistence/filter_by_amount_worker_{i}:/app/persistence")
             f.write("\n")
 
         # ====================
@@ -185,9 +203,13 @@ def generate_compose_file():
             wln(3, f"- WORKER_INDEX={i}")
             wln(3, f"- TOTAL_WORKERS={Q2_CATEGORIZERS}")
             wln(3, f"- NUMBER_OF_YEAR_WORKERS={YEAR_FILTERS}")
+            wln(2, "networks:")
+            wln(3, f'- tpg_net')
             wln(2, "depends_on:")
             wln(3, "- rabbitmq_server")
             wln(3, "- gateway")
+            # wln(2, "volumes:")
+            # wln(3, f"- ./persistence/categorizer_q2_worker_{i + 1}:/app/persistence")
             f.write("\n")
 
         # ====================
@@ -208,10 +230,13 @@ def generate_compose_file():
             wln(3, f"- NUMBER_OF_HOUR_WORKERS={HOUR_FILTERS}")
             assigned_semesters = ",".join(semester for s_i, semester in enumerate(Q3_SEMESTERS) if s_i % TARGET_Q3_CATEGORIZERS == i)
             wln(3, f"- ASSIGNED_SEMESTERS={assigned_semesters}")
+            wln(2, "networks:")
+            wln(3, f'- tpg_net')
             wln(2, "depends_on:")
             wln(3, "- rabbitmq_server")
             wln(2, "volumes:")
             wln(3, "- ./data/received:/app/data/received")
+            # wln(3, f"- ./persistence/categorizer_q3_worker_{i + 1}:/app/persistence")
             f.write("\n")
 
         # ====================
@@ -233,9 +258,13 @@ def generate_compose_file():
             wln(3, f"- AMOUNT_OF_WORKERS={BIRTHDAY_MAPPERS}")
             wln(3, f"- CATEGORIZER_Q4_WORKERS={Q4_CATEGORIZERS}")
             wln(3, f"- WORKER_INDEX={i}")
+            wln(2, "networks:")
+            wln(3, f'- tpg_net')
             wln(2, "depends_on:")
             wln(3, "- rabbitmq_server")
             wln(3, "- gateway")
+            # wln(2, "volumes:")
+            # wln(3, f"- ./persistence/birthday_dictionary_worker_{i}:/app/persistence")
             f.write("\n")
 
         # ====================
@@ -257,17 +286,33 @@ def generate_compose_file():
             wln(3, f"- BIRTHDAY_MAPPERS={BIRTHDAY_MAPPERS}")
             wln(3, "- BIRTHDAY_DICT_QUEUE=birthday_dictionary_queue")
             wln(3, f"- NUMBER_OF_YEAR_WORKERS={YEAR_FILTERS}")
+            wln(2, "networks:")
+            wln(3, f'- tpg_net')
             wln(2, "depends_on:")
             wln(3, "- rabbitmq_server")
             wln(3, "- gateway")
+            # wln(2, "volumes:")
+            # wln(3, f"- ./persistence/categorizer_q4_worker_{i + 1}:/app/persistence")
             f.write("\n")
             
         # ====================
         # Health Checker
         # ====================
+        def get_containers():
+            result = []
+            result.extend(f"filter_by_year_worker_{i}" for i in range(YEAR_FILTERS))
+            result.extend(f"filter_by_hour_worker_{i}" for i in range(HOUR_FILTERS))
+            result.extend(f"filter_by_amount_worker_{i}" for i in range(AMOUNT_FILTERS))
+            result.extend(f"categorizer_q2_worker_{i + 1}" for i in range(Q2_CATEGORIZERS))
+            result.extend(f"categorizer_q3_worker_{i + 1}" for i in range(TARGET_Q3_CATEGORIZERS))
+            result.extend(f"birthday_dictionary_worker_{i}" for i in range(BIRTHDAY_MAPPERS))
+            result.extend(f"categorizer_q4_worker_{i + 1}" for i in range(Q4_CATEGORIZERS))
+            result.extend(f"health_checker_{i}" for i in range(HEALTH_CHECKERS))
+            return result
+
         def get_checker_nodes_distribution():
             checkers = [f"health_checker_{i}" for i in range(HEALTH_CHECKERS)]
-            all_nodes = [f"health_checker_{i}" for i in range(HEALTH_CHECKERS)] # TODO: UPDATE TO ALL NODES
+            all_nodes = get_containers()
             distribution = {i: [] for i in range(HEALTH_CHECKERS)}
 
             checkers_cycle = cycle(checkers)

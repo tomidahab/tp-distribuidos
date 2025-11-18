@@ -4,6 +4,7 @@ import signal
 import sys
 from collections import defaultdict
 import time
+from common.health_check_receiver import HealthCheckReceiver
 from common.protocol import build_message, parse_message, row_to_dict
 from common.middleware import MessageMiddlewareExchange, MessageMiddlewareDisconnectedError, MessageMiddlewareMessageError, MessageMiddlewareQueue
 
@@ -153,6 +154,10 @@ def send_client_q4_results(client_id, store_user_counter):
 def main():
     signal.signal(signal.SIGTERM, _sigterm_handler)
     signal.signal(signal.SIGINT, _sigterm_handler)
+    
+    health_check_receiver = HealthCheckReceiver()
+    health_check_receiver.start()
+
     time.sleep(30)
     client_store_user_counter = listen_for_transactions()
     print("[categorizer_q4] All clients processed successfully.")

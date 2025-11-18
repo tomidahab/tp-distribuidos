@@ -66,9 +66,9 @@ def main():
         checker.start()
         checkers.append(checker)
 
-    receiver = HealthCheckReceiver()
-    receiver.start()
-    
+    health_check_receiver = HealthCheckReceiver()
+    health_check_receiver.start()
+
     # This will block the flow since this worker is not suppose to end
     signal.pause()
     
