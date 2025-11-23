@@ -4,6 +4,7 @@ import sys
 from collections import defaultdict
 import time
 from datetime import datetime
+import json
 
 from common.protocol import create_response_message
 from common import config
@@ -42,6 +43,14 @@ client_stats = defaultdict(lambda: {
     'transactions_end_received': 0,
     'transaction_items_end_received': 0
 })
+
+# Global variables for dictionaries
+global_client_sales_stats = defaultdict(lambda: defaultdict(lambda: {'count': int(0), 'sum': float(0.0)}))
+global_client_end_messages = defaultdict(int)
+
+# File paths for backup
+BACKUP_FILE = "categorizer_q2_backup.txt"
+MENU_ITEMS_FILE = "menu_items_backup.txt"
 
 def _close_queue(queue):
     if queue:
@@ -151,93 +160,162 @@ def listen_for_items():
         items_exchange.close()
     return items
 
-def listen_for_sales(items, topic_middleware):
-    # Dictionary per client: {client_id: {(item_id, year, month): {'count': int, 'sum': float}}}
-    client_sales_stats = defaultdict(lambda: defaultdict(lambda: {'count': int(0), 'sum': float(0.0)}))
-    # Track END messages per client: {client_id: count}
-    client_end_messages = defaultdict(int)
-    completed_clients = set()
-    
+def save_to_disk():
+    """
+    Saves the global dictionaries (sales stats and end messages) and transaction rows to a single file.
+    """
     try:
-        print(f"[categorizer_q2] Using topic middleware for queue: {topic_middleware.queue_name}")
-        queue = topic_middleware
-        print(f"[categorizer_q2] Connected successfully. Listening for sales on topic exchange with routing keys: {getattr(topic_middleware, 'routing_keys', 'N/A')}")
+        serializable_data = {
+            "sales_stats": {
+                client_id: {
+                    f"{item_id},{year},{month}": stats
+                    for (item_id, year, month), stats in sales_stats.items()
+                }
+                for client_id, sales_stats in global_client_sales_stats.items()
+            },
+            "end_messages": dict(global_client_end_messages)
+        }
+        with open(BACKUP_FILE, "w") as backup_file:
+            # Write the dictionary backup as JSON
+            json.dump(serializable_data, backup_file, indent=4)
+            backup_file.write("\n")  # Separate JSON from rows
+        print(f"[categorizer_q2] Saved dictionaries to {BACKUP_FILE}")
     except Exception as e:
-        print(f"[categorizer_q2] Failed to connect to RabbitMQ: {e}", file=sys.stderr)
-        return client_sales_stats
+        print(f"[categorizer_q2] ERROR saving dictionaries to disk: {e}", file=sys.stderr)
+
+def append_transaction_rows_to_disk(rows):
+    """
+    Appends transaction rows to the backup file.
+    """
+    try:
+        with open(BACKUP_FILE, "a") as backup_file:
+            backup_file.write("\n".join(rows) + "\n")
+        print(f"[categorizer_q2] Appended {len(rows)} rows to {BACKUP_FILE}")
+    except Exception as e:
+        print(f"[categorizer_q2] ERROR appending transaction rows to disk: {e}", file=sys.stderr)
+
+def save_menu_items_to_disk(items):
+    """
+    Saves the menu items to a separate file.
+    """
+    try:
+        with open(MENU_ITEMS_FILE, "w") as items_file:
+            json.dump(items, items_file, indent=4)
+        print(f"[categorizer_q2] Saved menu items to {MENU_ITEMS_FILE}")
+    except Exception as e:
+        print(f"[categorizer_q2] ERROR saving menu items to disk: {e}", file=sys.stderr)
+
+def recover_from_disk():
+    """
+    Recovers the global dictionaries, transaction rows, and menu items from disk.
+    """
+    global global_client_sales_stats, global_client_end_messages
+
+    # Recover dictionaries and transaction rows
+    recovered_rows = []
+    if os.path.exists(BACKUP_FILE):
+        try:
+            with open(BACKUP_FILE, "r") as backup_file:
+                lines = backup_file.readlines()
+                if lines:
+                    # Restore dictionaries from the first line (JSON)
+                    json_data = lines[0]
+                    data = json.loads(json_data)
+                    # Restore sales stats
+                    global_client_sales_stats = defaultdict(
+                        lambda: defaultdict(lambda: {'count': int(0), 'sum': float(0.0)}),
+                        {
+                            client_id: {
+                                tuple(key.split(",")): stats
+                                for key, stats in sales_stats.items()
+                            }
+                            for client_id, sales_stats in data["sales_stats"].items()
+                        }
+                    )
+                    # Restore end messages
+                    global_client_end_messages = defaultdict(
+                        int, data["end_messages"]
+                    )
+                    print(f"[categorizer_q2] Recovered dictionaries from {BACKUP_FILE}")
+                    # Restore transaction rows from the remaining lines
+                    recovered_rows = [line.strip() for line in lines[1:] if line.strip()]
+                    print(f"[categorizer_q2] Recovered {len(recovered_rows)} transaction rows from {BACKUP_FILE}")
+        except Exception as e:
+            print(f"[categorizer_q2] ERROR recovering from {BACKUP_FILE}: {e}", file=sys.stderr)
+
+    # Recover menu items
+    items = []
+    if os.path.exists(MENU_ITEMS_FILE):
+        try:
+            with open(MENU_ITEMS_FILE, "r") as items_file:
+                items = json.load(items_file)
+                print(f"[categorizer_q2] Recovered menu items from {MENU_ITEMS_FILE}")
+        except Exception as e:
+            print(f"[categorizer_q2] ERROR recovering menu items from {MENU_ITEMS_FILE}: {e}", file=sys.stderr)
+
+    return recovered_rows, items
+
+def listen_for_sales(items, topic_middleware):
+    global global_client_sales_stats, global_client_end_messages
+
+    client_end_messages = global_client_end_messages
+    row_counter = 0
+    completed_clients = set()
 
     def on_message_callback(message: bytes):
-        nonlocal completed_clients
-        global client_stats
+        nonlocal row_counter, completed_clients
         try:
             parsed_message = parse_message(message)
-            type_of_message = parsed_message['csv_type']  
+            type_of_message = parsed_message['csv_type']
             client_id = parsed_message['client_id']
             is_last = parsed_message['is_last']
-            
-            # Skip if client already completed - check BEFORE any processing
+
+            # Skip if client already completed
             if client_id in completed_clients:
-                print(f"[categorizer_q2] Worker {WORKER_INDEX} ignoring message from already completed client {client_id}")
-                print(f"[categorizer_q2] Worker {WORKER_INDEX} client {client_id} message is: {parsed_message}")
+                print(f"[categorizer_q2] Worker {WORKER_INDEX} ignoring message for already completed client {client_id}")
                 return
-            
-            client_stats[client_id]['transactions_messages_received'] += 1
-            client_stats[client_id]['transactions_rows_received'] += len(parsed_message['rows'])
-            
-            #print(f"[categorizer_q2] Worker {WORKER_INDEX} received transactions message from client {client_id} with {len(parsed_message['rows'])} rows, is_last={is_last} (total msgs: {client_stats[client_id]['transactions_messages_received']}, total rows: {client_stats[client_id]['transactions_rows_received']})")
-            
+
+            batch_rows = []  # Collect rows for batch writing
             for row in parsed_message['rows']:
+                batch_rows.append(row)
+                row_counter += 1
+
                 dic_fields_row = row_to_dict(row, type_of_message)
-                item_id = str(dic_fields_row['item_id'])  # Convert to string to ensure consistency
+                item_id = str(dic_fields_row['item_id'])
                 created_at = dic_fields_row['created_at']
                 dt = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S")
                 year = dt.year
                 month = dt.month
                 profit = float(dic_fields_row.get('subtotal', 0.0))
-                client_sales_stats[client_id][(item_id, year, month)]['count'] += 1
-                client_sales_stats[client_id][(item_id, year, month)]['sum'] += profit
-                
+                global_client_sales_stats[client_id][(item_id, year, month)]['count'] += 1
+                global_client_sales_stats[client_id][(item_id, year, month)]['sum'] += profit
+
+            # Append rows to disk
+            append_transaction_rows_to_disk(batch_rows)
+
+            # Save dictionaries and delete rows file every 100 rows
+            if row_counter % 100 == 0:
+                save_to_disk()
+
             if is_last:
-                client_stats[client_id]['transactions_end_received'] += 1
                 client_end_messages[client_id] += 1
                 print(f"[categorizer_q2] Worker {WORKER_INDEX} received END message {client_end_messages[client_id]}/{NUMBER_OF_YEAR_WORKERS} for client {client_id}")
-                
-                # Mark client as completed immediately when all END messages received
+
                 if client_end_messages[client_id] >= NUMBER_OF_YEAR_WORKERS:
-                    if client_id not in completed_clients:
-                        print(f"[categorizer_q2] Worker {WORKER_INDEX} client {client_id} received all END messages, processing results")
-                        completed_clients.add(client_id)
-                        
-                        # Print summary stats for this client
-                        stats = client_stats[client_id]
-                        print(f"[categorizer_q2] Worker {WORKER_INDEX} SUMMARY for client {client_id}: transactions_messages_received={stats['transactions_messages_received']}, transactions_rows_received={stats['transactions_rows_received']}, transaction_items_messages_received={stats['transaction_items_messages_received']}, transaction_items_rows_received={stats['transaction_items_rows_received']}")
-                        
-                        # Process and send results for this client
-                        send_client_q2_results(client_id, client_sales_stats[client_id], items)
-                        
-                        # Don't delete client data yet - keep it for potential debugging
-                        # but mark as completed
-                        print(f"[categorizer_q2] Worker {WORKER_INDEX} client {client_id} processing completed")
-                    
-                    # Simple stopping condition: if we've processed some clients and no new messages 
-                    # are coming for a while, we can assume all clients are done
-                    # For now, let's be more conservative and only stop when explicitly told
+                    completed_clients.add(client_id)
+                    send_client_q2_results(client_id, global_client_sales_stats[client_id], items)
+                    print(f"[categorizer_q2] Client {client_id} processing completed")
+
         except Exception as e:
             print(f"[categorizer_q2] Error processing sales message: {e}", file=sys.stderr)
 
     try:
         print("[categorizer_q2] Starting to consume sales messages...")
-        queue.start_consuming(on_message_callback)
-    except MessageMiddlewareDisconnectedError:
-        print("[categorizer_q2] Disconnected from middleware.", file=sys.stderr)
-    except MessageMiddlewareMessageError:
-        print("[categorizer_q2] Message error in middleware.", file=sys.stderr)
+        topic_middleware.start_consuming(on_message_callback)
     except Exception as e:
         print(f"[categorizer_q2] Unexpected error while consuming sales: {e}", file=sys.stderr)
     finally:
-        queue.close()
-    return client_sales_stats
-
+        topic_middleware.close()
 
 def get_top_products_per_year_month(sales_stats, items):
     id_to_name = {item['item_id']: item['item_name'] for item in items}
@@ -294,6 +372,27 @@ def send_results_to_gateway(results):
 def main():
     signal.signal(signal.SIGTERM, _sigterm_handler)
     signal.signal(signal.SIGINT, _sigterm_handler)
+
+    # Recover state from disk
+    recovered_rows, items = recover_from_disk()
+
+    # If no items were recovered, start the item collection process
+    if not items:
+        items = listen_for_items()
+        save_menu_items_to_disk(items)
+
+    # Process recovered rows
+    for row in recovered_rows:
+        # Process each recovered row as if it were received from the queue
+        pass  # Add logic to process recovered rows if necessary
+
+    # Continue with normal processing
+        print("[categorizer_q2] Waiting for RabbitMQ to be ready...")
+        time.sleep(30)  # Esperar a que RabbitMQ esté listo
+        print("[categorizer_q2] Starting worker...")
+        
+        # Setup queues and exchanges
+        global topic_middleware
     try:
         print("[categorizer_q2] Waiting for RabbitMQ to be ready...")
         time.sleep(30)  # Esperar a que RabbitMQ esté listo
@@ -303,17 +402,8 @@ def main():
         global topic_middleware
         topic_middleware = setup_queue_and_exchanges()
         print("[categorizer_q2] Queues and exchanges setup completed.")
-        
-        items = listen_for_items()
-        print(f"[categorizer_q2] Collected {len(items)} items: {items}")
-        
-        if not items:
-            print("[categorizer_q2] No items received, exiting.")
-            return
-            
-        print(f"[categorizer_q2] Starting to consume sales messages from topic exchange...")
         # In multi-client mode, listen_for_sales handles everything including sending results per client
-        client_sales_stats = listen_for_sales(items, topic_middleware)
+        listen_for_sales(items, topic_middleware)
         print("[categorizer_q2] All clients processed successfully.")
         
     except Exception as e:
