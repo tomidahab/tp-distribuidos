@@ -48,9 +48,13 @@ client_stats = defaultdict(lambda: {
 global_client_sales_stats = defaultdict(lambda: defaultdict(lambda: {'count': int(0), 'sum': float(0.0)}))
 global_client_end_messages = defaultdict(int)
 
-# File paths for backup
-BACKUP_FILE = "categorizer_q2_backup.txt"
-MENU_ITEMS_FILE = "menu_items_backup.txt"
+# File paths for backup - worker specific in persistence directory
+PERSISTENCE_DIR = "/app/persistence"
+BACKUP_FILE = f"{PERSISTENCE_DIR}/categorizer_q2_worker_{WORKER_INDEX}_backup.txt"
+MENU_ITEMS_FILE = f"{PERSISTENCE_DIR}/menu_items_worker_{WORKER_INDEX}_backup.txt"
+
+# Message counter for persistence triggers
+message_counter = 0
 
 def _close_queue(queue):
     if queue:
@@ -160,11 +164,17 @@ def listen_for_items():
         items_exchange.close()
     return items
 
-def save_to_disk():
+def save_state_to_disk():
     """
-    Saves the global dictionaries (sales stats and end messages) and transaction rows to a single file.
+    Saves the complete state (dictionaries) and clears any pending messages.
+    This rewrites the entire file with just the current state.
     """
+    global global_client_sales_stats, global_client_end_messages
+    
     try:
+        # Create persistence directory if it doesn't exist
+        os.makedirs(PERSISTENCE_DIR, exist_ok=True)
+        
         serializable_data = {
             "sales_stats": {
                 client_id: {
@@ -175,95 +185,186 @@ def save_to_disk():
             },
             "end_messages": dict(global_client_end_messages)
         }
+        
+        # Rewrite entire file with current state
         with open(BACKUP_FILE, "w") as backup_file:
-            # Write the dictionary backup as JSON
             json.dump(serializable_data, backup_file, indent=4)
-            backup_file.write("\n")  # Separate JSON from rows
-        print(f"[categorizer_q2] Saved dictionaries to {BACKUP_FILE}")
-    except Exception as e:
-        print(f"[categorizer_q2] ERROR saving dictionaries to disk: {e}", file=sys.stderr)
+            # keep a newline so appended messages start on the next line
+            backup_file.write("\n")
 
-def append_transaction_rows_to_disk(rows):
+        print(f"[categorizer_q2] Worker {WORKER_INDEX} saved complete state to {BACKUP_FILE}")
+    except Exception as e:
+        print(f"[categorizer_q2] ERROR saving state to disk: {e}", file=sys.stderr)
+        raise e
+
+def append_message_to_disk(parsed_message):
     """
-    Appends transaction rows to the backup file.
+    Appends a processed message to the backup file for recovery.
     """
     try:
+        # Create persistence directory if it doesn't exist
+        os.makedirs(PERSISTENCE_DIR, exist_ok=True)
+        
         with open(BACKUP_FILE, "a") as backup_file:
-            backup_file.write("\n".join(rows) + "\n")
-        print(f"[categorizer_q2] Appended {len(rows)} rows to {BACKUP_FILE}")
+            json.dump(parsed_message, backup_file)
+            backup_file.write("\n")
+        #print(f"[categorizer_q2] Worker {WORKER_INDEX} appended message to disk")
     except Exception as e:
-        print(f"[categorizer_q2] ERROR appending transaction rows to disk: {e}", file=sys.stderr)
+        print(f"[categorizer_q2] ERROR appending message to disk: {e}", file=sys.stderr)
+        raise e
 
 def save_menu_items_to_disk(items):
     """
     Saves the menu items to a separate file.
     """
     try:
+        # Create persistence directory if it doesn't exist
+        os.makedirs(PERSISTENCE_DIR, exist_ok=True)
+        
         with open(MENU_ITEMS_FILE, "w") as items_file:
             json.dump(items, items_file, indent=4)
-        print(f"[categorizer_q2] Saved menu items to {MENU_ITEMS_FILE}")
+        print(f"[categorizer_q2] Worker {WORKER_INDEX} saved menu items to {MENU_ITEMS_FILE}")
     except Exception as e:
         print(f"[categorizer_q2] ERROR saving menu items to disk: {e}", file=sys.stderr)
 
-def recover_from_disk():
+def recover_state_from_disk():
     """
-    Recovers the global dictionaries, transaction rows, and menu items from disk.
+    Recovers the state from disk by:
+    1. Finding the last '}' to locate the end of the JSON state
+    2. Loading the state dictionary 
+    3. Processing any pending messages that came after the last state save
+    4. Returns the items and count of processed messages
     """
-    global global_client_sales_stats, global_client_end_messages
-
-    # Recover dictionaries and transaction rows
-    recovered_rows = []
-    if os.path.exists(BACKUP_FILE):
-        try:
-            with open(BACKUP_FILE, "r") as backup_file:
-                lines = backup_file.readlines()
-                if lines:
-                    # Restore dictionaries from the first line (JSON)
-                    json_data = lines[0]
-                    data = json.loads(json_data)
-                    # Restore sales stats
-                    global_client_sales_stats = defaultdict(
-                        lambda: defaultdict(lambda: {'count': int(0), 'sum': float(0.0)}),
-                        {
-                            client_id: {
-                                tuple(key.split(",")): stats
-                                for key, stats in sales_stats.items()
-                            }
-                            for client_id, sales_stats in data["sales_stats"].items()
-                        }
-                    )
-                    # Restore end messages
-                    global_client_end_messages = defaultdict(
-                        int, data["end_messages"]
-                    )
-                    print(f"[categorizer_q2] Recovered dictionaries from {BACKUP_FILE}")
-                    # Restore transaction rows from the remaining lines
-                    recovered_rows = [line.strip() for line in lines[1:] if line.strip()]
-                    print(f"[categorizer_q2] Recovered {len(recovered_rows)} transaction rows from {BACKUP_FILE}")
-        except Exception as e:
-            print(f"[categorizer_q2] ERROR recovering from {BACKUP_FILE}: {e}", file=sys.stderr)
-
-    # Recover menu items
+    global global_client_sales_stats, global_client_end_messages, message_counter
+    
+    pending_messages = []
     items = []
+    
+    # First try to recover items
     if os.path.exists(MENU_ITEMS_FILE):
         try:
             with open(MENU_ITEMS_FILE, "r") as items_file:
                 items = json.load(items_file)
-                print(f"[categorizer_q2] Recovered menu items from {MENU_ITEMS_FILE}")
+                print(f"[categorizer_q2] Worker {WORKER_INDEX} recovered {len(items)} menu items")
         except Exception as e:
-            print(f"[categorizer_q2] ERROR recovering menu items from {MENU_ITEMS_FILE}: {e}", file=sys.stderr)
+            print(f"[categorizer_q2] ERROR recovering menu items: {e}", file=sys.stderr)
+    
+    # Now recover state and pending messages
+    if not os.path.exists(BACKUP_FILE):
+        print(f"[categorizer_q2] Worker {WORKER_INDEX} no backup file found, starting fresh")
+        return items, 0
+    
+    try:
+        with open(BACKUP_FILE, "r") as backup_file:
+            content = backup_file.read()
+            
+        if not content.strip():
+            print(f"[categorizer_q2] Worker {WORKER_INDEX} backup file is empty, starting fresh")
+            return items, 0
+        
+        # Find the last '}' to locate the end of the JSON state
+        last_brace_idx = content.rfind('}')
+        if last_brace_idx == -1:
+            print(f"[categorizer_q2] Worker {WORKER_INDEX} no valid JSON state found")
+            return items, 0
+        
+        # Extract JSON state and pending messages
+        json_part = content[:last_brace_idx + 1]
+        messages_part = content[last_brace_idx + 1:].strip()
+        
+        # Load the state
+        state_data = json.loads(json_part)
 
-    return recovered_rows, items
+        # Normalize and restore sales stats (ensure year/month are ints)
+        recovered_sales = {}
+        for client_id, sales_stats in state_data.get("sales_stats", {}).items():
+            recovered_sales[client_id] = {}
+            for key, stats in sales_stats.items():
+                try:
+                    item_id, year_s, month_s = key.split(",")
+                    recovered_key = (str(item_id), int(year_s), int(month_s))
+                except Exception:
+                    # fallback: keep as tuple of strings
+                    recovered_key = tuple(key.split(","))
+                recovered_sales[client_id][recovered_key] = stats
+
+        global_client_sales_stats = defaultdict(
+            lambda: defaultdict(lambda: {'count': int(0), 'sum': float(0.0)}),
+            recovered_sales
+        )
+        
+        # Restore end messages
+        global_client_end_messages = defaultdict(int, state_data["end_messages"])
+        
+        print(f"[categorizer_q2] Worker {WORKER_INDEX} recovered state from disk")
+        
+        # Process pending messages
+        if messages_part:
+            message_lines = [line.strip() for line in messages_part.split('\n') if line.strip()]
+            processed_count = 0
+            
+            for line in message_lines:
+                try:
+                    parsed_message = json.loads(line)
+                    process_recovered_message(parsed_message)
+                    processed_count += 1
+                except Exception as e:
+                    print(f"[categorizer_q2] ERROR processing recovered message: {e}", file=sys.stderr)
+            
+            print(f"[categorizer_q2] Worker {WORKER_INDEX} processed {processed_count} pending messages")
+            
+            # Reset message counter to continue from where we left off
+            message_counter = processed_count
+            
+            # Save clean state after processing pending messages
+            save_state_to_disk()
+            
+            return items, processed_count
+        
+        return items, 0
+        
+    except Exception as e:
+        print(f"[categorizer_q2] ERROR recovering from disk: {e}", file=sys.stderr)
+        return items, 0
+
+def process_recovered_message(parsed_message):
+    """
+    Process a recovered message from disk to rebuild state.
+    This is similar to the main processing but without disk operations.
+    """
+    global global_client_sales_stats, global_client_end_messages
+    
+    type_of_message = parsed_message['csv_type']
+    client_id = parsed_message['client_id']
+    is_last = parsed_message['is_last']
+    
+    # Process each row in the message
+    for row in parsed_message['rows']:
+        dic_fields_row = row_to_dict(row, type_of_message)
+        item_id = str(dic_fields_row['item_id'])
+        created_at = dic_fields_row['created_at']
+        dt = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S")
+        year = dt.year
+        month = dt.month
+        profit = float(dic_fields_row.get('subtotal', 0.0))
+        
+        # Update sales stats
+        global_client_sales_stats[client_id][(item_id, year, month)]['count'] += 1
+        global_client_sales_stats[client_id][(item_id, year, month)]['sum'] += profit
+    
+    # Handle END messages
+    if is_last:
+        global_client_end_messages[client_id] += 1
 
 def listen_for_sales(items, topic_middleware):
-    global global_client_sales_stats, global_client_end_messages
+    global global_client_sales_stats, global_client_end_messages, message_counter
 
     client_end_messages = global_client_end_messages
-    row_counter = 0
     completed_clients = set()
 
-    def on_message_callback(message: bytes):
-        nonlocal row_counter, completed_clients
+    def on_message_callback(message: bytes, delivery_tag, channel):
+        global message_counter
+        nonlocal completed_clients
         try:
             parsed_message = parse_message(message)
             type_of_message = parsed_message['csv_type']
@@ -273,13 +374,11 @@ def listen_for_sales(items, topic_middleware):
             # Skip if client already completed
             if client_id in completed_clients:
                 print(f"[categorizer_q2] Worker {WORKER_INDEX} ignoring message for already completed client {client_id}")
+                channel.basic_ack(delivery_tag=delivery_tag)
                 return
 
-            batch_rows = []  # Collect rows for batch writing
+            # Process message: update sales statistics
             for row in parsed_message['rows']:
-                batch_rows.append(row)
-                row_counter += 1
-
                 dic_fields_row = row_to_dict(row, type_of_message)
                 item_id = str(dic_fields_row['item_id'])
                 created_at = dic_fields_row['created_at']
@@ -290,28 +389,41 @@ def listen_for_sales(items, topic_middleware):
                 global_client_sales_stats[client_id][(item_id, year, month)]['count'] += 1
                 global_client_sales_stats[client_id][(item_id, year, month)]['sum'] += profit
 
-            # Append rows to disk
-            append_transaction_rows_to_disk(batch_rows)
-
-            # Save dictionaries and delete rows file every 100 rows
-            if row_counter % 100 == 0:
-                save_to_disk()
-
+            # Handle END messages
             if is_last:
                 client_end_messages[client_id] += 1
                 print(f"[categorizer_q2] Worker {WORKER_INDEX} received END message {client_end_messages[client_id]}/{NUMBER_OF_YEAR_WORKERS} for client {client_id}")
 
-                if client_end_messages[client_id] >= NUMBER_OF_YEAR_WORKERS:
-                    completed_clients.add(client_id)
-                    send_client_q2_results(client_id, global_client_sales_stats[client_id], items)
-                    print(f"[categorizer_q2] Client {client_id} processing completed")
+            # CRITICAL PERSISTENCE FLOW:
+            # 1. Save message to disk (always)
+            append_message_to_disk(parsed_message)
+            
+            # 2. ACK the message (only after successful disk write)
+            channel.basic_ack(delivery_tag=delivery_tag)
+            
+            # 3. Update message counter
+            message_counter += 1
+            
+            # 4. Save complete state every 100 messages OR on END messages
+            if message_counter % 100 == 0 or is_last:
+                save_state_to_disk()
+                print(f"[categorizer_q2] Worker {WORKER_INDEX} saved state at message {message_counter}")
+
+            # 5. Check if client is complete (after state is saved)
+            if is_last and client_end_messages[client_id] >= NUMBER_OF_YEAR_WORKERS:
+                completed_clients.add(client_id)
+                send_client_q2_results(client_id, global_client_sales_stats[client_id], items)
+                print(f"[categorizer_q2] Client {client_id} processing completed")
 
         except Exception as e:
-            print(f"[categorizer_q2] Error processing sales message: {e}", file=sys.stderr)
+            print(f"[categorizer_q2] ERROR processing sales message: {e}", file=sys.stderr)
+            # Don't ACK on error - message will be requeued
+            channel.basic_nack(delivery_tag=delivery_tag, requeue=True)
 
     try:
-        print("[categorizer_q2] Starting to consume sales messages...")
-        topic_middleware.start_consuming(on_message_callback)
+        print("[categorizer_q2] Starting to consume sales messages with manual ACK...")
+        # Use manual ACK mode (auto_ack=False)
+        topic_middleware.start_consuming(on_message_callback, auto_ack=False)
     except Exception as e:
         print(f"[categorizer_q2] Unexpected error while consuming sales: {e}", file=sys.stderr)
     finally:
@@ -373,36 +485,30 @@ def main():
     signal.signal(signal.SIGTERM, _sigterm_handler)
     signal.signal(signal.SIGINT, _sigterm_handler)
 
-    # Recover state from disk
-    recovered_rows, items = recover_from_disk()
-
-    # If no items were recovered, start the item collection process
-    if not items:
-        items = listen_for_items()
-        save_menu_items_to_disk(items)
-
-    # Process recovered rows
-    for row in recovered_rows:
-        # Process each recovered row as if it were received from the queue
-        pass  # Add logic to process recovered rows if necessary
-
-    # Continue with normal processing
-        print("[categorizer_q2] Waiting for RabbitMQ to be ready...")
-        time.sleep(30)  # Esperar a que RabbitMQ esté listo
-        print("[categorizer_q2] Starting worker...")
-        
-        # Setup queues and exchanges
-        global topic_middleware
     try:
+        print(f"[categorizer_q2] Worker {WORKER_INDEX} starting...")
+        
+        # STEP 1: Recover state and process pending messages
+        items, processed_count = recover_state_from_disk()
+        print(f"[categorizer_q2] Worker {WORKER_INDEX} recovered state, processed {processed_count} pending messages")
+
+        # STEP 2: If no items were recovered, collect them
+        if not items:
+            print(f"[categorizer_q2] Worker {WORKER_INDEX} collecting menu items...")
+            items = listen_for_items()
+            save_menu_items_to_disk(items)
+            print(f"[categorizer_q2] Worker {WORKER_INDEX} collected {len(items)} menu items")
+
+        # STEP 3: Wait for RabbitMQ and setup connections
         print("[categorizer_q2] Waiting for RabbitMQ to be ready...")
         time.sleep(30)  # Esperar a que RabbitMQ esté listo
-        print("[categorizer_q2] Starting worker...")
         
         # Setup queues and exchanges
         global topic_middleware
         topic_middleware = setup_queue_and_exchanges()
         print("[categorizer_q2] Queues and exchanges setup completed.")
-        # In multi-client mode, listen_for_sales handles everything including sending results per client
+        
+        # STEP 4: Start consuming new messages with manual ACK
         listen_for_sales(items, topic_middleware)
         print("[categorizer_q2] All clients processed successfully.")
         
