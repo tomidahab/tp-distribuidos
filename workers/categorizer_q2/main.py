@@ -56,6 +56,9 @@ MENU_ITEMS_FILE = f"{PERSISTENCE_DIR}/menu_items_worker_{WORKER_INDEX}_backup.tx
 # Message counter for persistence triggers
 message_counter = 0
 
+# Track processed messages to avoid duplicates during recovery
+processed_message_ids = set()
+
 def _close_queue(queue):
     if queue:
         queue.close()
@@ -235,7 +238,7 @@ def recover_state_from_disk():
     3. Processing any pending messages that came after the last state save
     4. Returns the items and count of processed messages
     """
-    global global_client_sales_stats, global_client_end_messages, message_counter
+    global global_client_sales_stats, global_client_end_messages, message_counter, processed_message_ids
     
     pending_messages = []
     items = []
@@ -298,7 +301,7 @@ def recover_state_from_disk():
         
         print(f"[categorizer_q2] Worker {WORKER_INDEX} recovered state from disk")
         
-        # Process pending messages
+        # Process pending messages ONLY if there are any
         if messages_part:
             message_lines = [line.strip() for line in messages_part.split('\n') if line.strip()]
             processed_count = 0
@@ -306,6 +309,11 @@ def recover_state_from_disk():
             for line in message_lines:
                 try:
                     parsed_message = json.loads(line)
+                    # Add to processed set to avoid reprocessing
+                    message_id = parsed_message.get('message_id', '')
+                    sender = parsed_message.get('sender', 'unknown')
+                    processed_message_ids.add(f"{sender}:{message_id}")
+                    
                     process_recovered_message(parsed_message)
                     processed_count += 1
                 except Exception as e:
@@ -316,10 +324,14 @@ def recover_state_from_disk():
             # Reset message counter to continue from where we left off
             message_counter = processed_count
             
-            # Save clean state after processing pending messages
+            # Save clean state after processing pending messages (this removes the pending messages)
             save_state_to_disk()
             
             return items, processed_count
+        else:
+            # No pending messages, just use the recovered state
+            message_counter = 0
+            print(f"[categorizer_q2] Worker {WORKER_INDEX} no pending messages to process")
         
         return items, 0
         
@@ -363,13 +375,22 @@ def listen_for_sales(items, topic_middleware):
     completed_clients = set()
 
     def on_message_callback(message: bytes, delivery_tag, channel):
-        global message_counter
+        global message_counter, processed_message_ids
         nonlocal completed_clients
         try:
             parsed_message = parse_message(message)
             type_of_message = parsed_message['csv_type']
             client_id = parsed_message['client_id']
             is_last = parsed_message['is_last']
+            message_id = parsed_message.get('message_id', '')
+            sender = parsed_message.get('sender', 'unknown')
+
+            # Skip if already processed (duplicate detection)
+            duplicate_key = f"{sender}:{message_id}"
+            if duplicate_key in processed_message_ids:
+                print(f"[categorizer_q2] Worker {WORKER_INDEX} DUPLICATE message detected: {duplicate_key} - skipping")
+                channel.basic_ack(delivery_tag=delivery_tag)
+                return
 
             # Skip if client already completed
             if client_id in completed_clients:
@@ -395,21 +416,24 @@ def listen_for_sales(items, topic_middleware):
                 print(f"[categorizer_q2] Worker {WORKER_INDEX} received END message {client_end_messages[client_id]}/{NUMBER_OF_YEAR_WORKERS} for client {client_id}")
 
             # CRITICAL PERSISTENCE FLOW:
-            # 1. Save message to disk (always)
+            # 1. Mark as processed to avoid duplicates
+            processed_message_ids.add(duplicate_key)
+            
+            # 2. Save message to disk (always)
             append_message_to_disk(parsed_message)
             
-            # 2. ACK the message (only after successful disk write)
+            # 3. ACK the message (only after successful disk write)
             channel.basic_ack(delivery_tag=delivery_tag)
             
-            # 3. Update message counter
+            # 4. Update message counter
             message_counter += 1
             
-            # 4. Save complete state every 100 messages OR on END messages
+            # 5. Save complete state every 100 messages OR on END messages
             if message_counter % 100 == 0 or is_last:
                 save_state_to_disk()
                 print(f"[categorizer_q2] Worker {WORKER_INDEX} saved state at message {message_counter}")
 
-            # 5. Check if client is complete (after state is saved)
+            # 6. Check if client is complete (after state is saved)
             if is_last and client_end_messages[client_id] >= NUMBER_OF_YEAR_WORKERS:
                 completed_clients.add(client_id)
                 send_client_q2_results(client_id, global_client_sales_stats[client_id], items)
