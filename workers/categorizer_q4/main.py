@@ -4,6 +4,7 @@ import sys
 from collections import defaultdict, Counter
 import time
 import json
+from common.health_check_receiver import HealthCheckReceiver
 from common.protocol import build_message, parse_message, row_to_dict
 from common.middleware import MessageMiddlewareExchange, MessageMiddlewareDisconnectedError, MessageMiddlewareMessageError, MessageMiddlewareQueue
 
@@ -250,6 +251,10 @@ def append_to_backup_data(row, filename="backup_data.txt"):
 def main():
     signal.signal(signal.SIGTERM, _sigterm_handler)
     signal.signal(signal.SIGINT, _sigterm_handler)
+    
+    health_check_receiver = HealthCheckReceiver()
+    health_check_receiver.start()
+
     time.sleep(30)
     init()  
     listen_for_transactions()

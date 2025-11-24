@@ -6,6 +6,7 @@ import time
 from datetime import datetime
 import json
 
+from common.health_check_receiver import HealthCheckReceiver
 from common.protocol import create_response_message
 from common import config
 # Debug imports
@@ -508,6 +509,9 @@ def send_results_to_gateway(results):
 def main():
     signal.signal(signal.SIGTERM, _sigterm_handler)
     signal.signal(signal.SIGINT, _sigterm_handler)
+
+    health_check_receiver = HealthCheckReceiver()
+    health_check_receiver.start()
 
     try:
         print(f"[categorizer_q2] Worker {WORKER_INDEX} starting...")

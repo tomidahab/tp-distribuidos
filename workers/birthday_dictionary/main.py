@@ -4,6 +4,7 @@ import sys
 from collections import defaultdict
 import time
 import threading
+from common.health_check_receiver import HealthCheckReceiver
 from common.protocol import parse_message, build_message
 from common.middleware import MessageMiddlewareQueue, MessageMiddlewareDisconnectedError, MessageMiddlewareMessageError, MessageMiddlewareExchange
 from queue import Queue # Thread safe queue
@@ -200,6 +201,10 @@ def listen_for_users_data():
 def main():
     signal.signal(signal.SIGTERM, _sigterm_handler)
     signal.signal(signal.SIGINT, _sigterm_handler)
+
+    health_check_receiver = HealthCheckReceiver()
+    health_check_receiver.start()
+
     time.sleep(30)
 
     users_data_listener_t = threading.Thread(
