@@ -107,8 +107,8 @@ def listen_for_transactions():
         print(f"[categorizer_q3] Creating topic MessageMiddlewareExchange for data messages...", flush=True)
         global topic_middleware
         topic_middleware = MessageMiddlewareExchange(
-            host=RABBITMQ_HOST, 
-            exchange_name=RECEIVER_EXCHANGE, 
+            host=RABBITMQ_HOST,
+            exchange_name=RECEIVER_EXCHANGE,
             exchange_type='topic',
             queue_name=f"categorizer_q3_worker_{WORKER_INDEX}_queue",
             routing_keys=worker_routing_keys
@@ -255,10 +255,6 @@ def send_results_to_gateway(semester_store_stats):
         raise e
 
 def save_state_to_disk(client_semester_store_stats, client_end_messages):
-    """
-    Saves the client_semester_store_stats and client_end_messages to disk atomically.
-    Writes to an auxiliary file first, then renames it to the main backup file.
-    """
     try:
         os.makedirs(PERSISTENCE_DIR, exist_ok=True)
         serializable_data = {
@@ -269,13 +265,12 @@ def save_state_to_disk(client_semester_store_stats, client_end_messages):
                 }
                 for client_id, semester_store_stats in client_semester_store_stats.items()
             },
-            "end_messages": dict(client_end_messages)
+            "end_messages": dict(client_end_messages),
+            "processed_message_ids": list(processed_message_ids)  # Convert set to list for JSON serialization
         }
-        # Write to the auxiliary file
         with open(AUXILIARY_FILE, "w") as aux_file:
-            json.dump(serializable_data, aux_file, indent=4)
-            aux_file.write("\n")  # Separate JSON from rows
-        # Rename the auxiliary file to the main backup file
+            json.dump(serializable_data, aux_file, indent=4)  # Write JSON data
+            aux_file.write("\n")  # Add a newline to separate JSON from rows
         os.rename(AUXILIARY_FILE, BACKUP_FILE)
         print(f"[categorizer_q3] Worker {WORKER_INDEX} saved state to {BACKUP_FILE} atomically")
     except Exception as e:
@@ -301,6 +296,8 @@ def recover_state_from_disk():
     """
     client_semester_store_stats = defaultdict(lambda: defaultdict(float))
     client_end_messages = defaultdict(int)
+    global processed_message_ids
+    processed_message_ids = set()
     valid_rows = []
 
     # Check if the auxiliary file exists
@@ -315,9 +312,13 @@ def recover_state_from_disk():
     try:
         with open(BACKUP_FILE, "r") as backup_file:
             lines = backup_file.readlines()
-            if lines:
-                # Restore dictionaries from the first line (JSON)
-                json_data = lines[0]
+            if not lines:
+                print(f"[categorizer_q3] Backup file is empty. Starting fresh.")
+                return client_semester_store_stats, client_end_messages, valid_rows
+
+            # Parse the first line as JSON
+            try:
+                json_data = lines[0].strip()
                 data = json.loads(json_data)
                 # Restore semester store stats
                 client_semester_store_stats = defaultdict(
@@ -332,36 +333,23 @@ def recover_state_from_disk():
                 )
                 # Restore end messages
                 client_end_messages = defaultdict(int, data["end_messages"])
-                print(f"[categorizer_q3] Worker {WORKER_INDEX} recovered state from {BACKUP_FILE}")
+                # Restore processed message IDs
+                processed_message_ids = set(data.get("processed_message_ids", []))
+                print(f"[categorizer_q3] Successfully recovered state from JSON in {BACKUP_FILE}")
+            except json.JSONDecodeError as e:
+                print(f"[categorizer_q3] ERROR parsing JSON from backup file: {e}", file=sys.stderr)
+                return client_semester_store_stats, client_end_messages, valid_rows
 
-                # Validate and restore transaction rows from the remaining lines
-                for line in lines[1:]:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        # Validate the row (e.g., check if it can be parsed)
-                        dic_fields_row = row_to_dict(line, CSV_TYPES_REVERSE['transactions'])
-                        created_at = dic_fields_row['created_at']
-                        datetime_obj = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S")
-                        year = datetime_obj.year
-                        month = datetime_obj.month
-                        semester = get_semester(month)
-                        store_id = str(dic_fields_row['store_id'])
-                        payment_value = float(dic_fields_row.get('final_amount', 0.0))
-                        client_id = dic_fields_row['client_id']
-
-                        if payment_value > 0:
-                            key = (year, semester, store_id)
-                            client_semester_store_stats[client_id][key] += payment_value
-                        valid_rows.append(line)  # Add valid row to the list
-                    except Exception as e:
-                        print(f"[categorizer_q3] Corrupted row detected and skipped: {line}", file=sys.stderr)
-
-        # Rewrite the backup file with only valid rows
-        save_state_to_disk(client_semester_store_stats, client_end_messages)
-        append_transaction_rows_to_disk(valid_rows)
-        print(f"[categorizer_q3] Worker {WORKER_INDEX} cleaned up corrupted rows and updated {BACKUP_FILE}")
+            # Process remaining lines as transaction rows
+            for line in lines[1:]:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    dic_fields_row = row_to_dict(line, CSV_TYPES_REVERSE['transactions'])
+                    valid_rows.append(line)
+                except Exception:
+                    print(f"[categorizer_q3] Corrupted row detected and skipped: {line}", file=sys.stderr)
 
     except Exception as e:
         print(f"[categorizer_q3] ERROR recovering state from {BACKUP_FILE}: {e}", file=sys.stderr)
@@ -375,8 +363,13 @@ def main():
     health_check_receiver.start()
     print("[categorizer_q3] MAIN FUNCTION STARTED", flush=True)
     try:
-        print("[categorizer_q3] Waiting for RabbitMQ to be ready...", flush=True)
-        time.sleep(config.MIDDLEWARE_UP_TIME)  # Wait for RabbitMQ to be ready
+        # Check if a backup file exists
+        if not os.path.exists(BACKUP_FILE):
+            print("[categorizer_q3] No backup file found. Waiting for RabbitMQ to be ready...", flush=True)
+            time.sleep(60)  # Wait for RabbitMQ to be ready
+        else:
+            print("[categorizer_q3] Backup file found. Skipping RabbitMQ wait.", flush=True)
+
         print("[categorizer_q3] Starting worker...", flush=True)
         print("[categorizer_q3] About to call listen_for_transactions()...", flush=True)
         

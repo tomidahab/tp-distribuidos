@@ -217,6 +217,7 @@ def write_backup_data(client_store_user_counter, client_end_messages, filename="
     Writes the client_store_user_counter dictionary and client_end_messages to a file, overwriting any existing data.
     The dictionary is serialized to JSON format for easy readability and restoration.
     """
+    ## Auxiliary file creation with json dump with dictionary
     try:
         # Convert defaultdict and Counter objects to regular dictionaries for JSON serialization
         serializable_data = {
@@ -235,6 +236,7 @@ def write_backup_data(client_store_user_counter, client_end_messages, filename="
         print(f"[categorizer_q4] Backup data written to {filename}")
     except Exception as e:
         print(f"[categorizer_q4] ERROR writing backup data: {e}", file=sys.stderr)
+    ## Auxiliary file deletion
 
 def append_to_backup_data(row, filename="backup_data.txt"):
     """
@@ -251,7 +253,7 @@ def append_to_backup_data(row, filename="backup_data.txt"):
 def main():
     signal.signal(signal.SIGTERM, _sigterm_handler)
     signal.signal(signal.SIGINT, _sigterm_handler)
-    
+      
     health_check_receiver = HealthCheckReceiver()
     health_check_receiver.start()
 

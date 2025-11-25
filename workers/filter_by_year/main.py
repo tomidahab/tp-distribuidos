@@ -365,7 +365,7 @@ def main():
             exchange_name=RECEIVER_EXCHANGE_T,
             exchange_type='topic',
             queue_name=f"filter_by_year_transactions_worker_{WORKER_INDEX}_queue",
-            routing_keys=[f"year.{WORKER_INDEX}"]
+            routing_keys=[f"year.{WORKER_INDEX}"],
         )
         print(f"[filter_by_year] Worker {WORKER_INDEX} Connected to transactions exchange: {RECEIVER_EXCHANGE_T}")
         
@@ -375,7 +375,7 @@ def main():
             exchange_name=RECEIVER_EXCHANGE_T_ITEMS,
             exchange_type='topic',
             queue_name=f"filter_by_year_transaction_items_worker_{WORKER_INDEX}_queue",
-            routing_keys=[f"year.{WORKER_INDEX}"]
+            routing_keys=[f"year.{WORKER_INDEX}"],
         )
         print(f"[filter_by_year] Worker {WORKER_INDEX} Connected to transaction_items exchange: {RECEIVER_EXCHANGE_T_ITEMS}")
         

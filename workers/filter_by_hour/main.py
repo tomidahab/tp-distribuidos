@@ -341,7 +341,7 @@ def main():
         exchange_name=RECEIVER_EXCHANGE,
         exchange_type='topic',
         queue_name=f"filter_by_hour_worker_{WORKER_INDEX}_queue",
-        routing_keys=[f'hour.{WORKER_INDEX}']  # Each worker listens to specific routing key
+        routing_keys=[f'hour.{WORKER_INDEX}'],  # Each worker listens to specific routing key
     )
     
     print(f"[filter_by_hour] Worker {WORKER_INDEX} connecting to exchanges...", flush=True)
