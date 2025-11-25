@@ -5,6 +5,8 @@ from collections import defaultdict
 import time
 from datetime import datetime
 from common import config
+import json
+
 from common.health_check_receiver import HealthCheckReceiver
 # Debug startup
 print("[categorizer_q3] STARTING UP - Basic imports done", flush=True)
@@ -49,6 +51,12 @@ else:
 topic_middleware = None
 gateway_result_queue = None
 
+# File paths for backup
+PERSISTENCE_DIR = "/app/persistence"
+BACKUP_FILE = f"{PERSISTENCE_DIR}/categorizer_q3_worker_{WORKER_INDEX}_backup.txt"
+AUXILIARY_FILE = f"{PERSISTENCE_DIR}/categorizer_q3_worker_{WORKER_INDEX}_backup.tmp"
+
+
 def _close_queue(queue):
     if queue:
         queue.close()
@@ -61,19 +69,37 @@ def get_semester(month):
     return 1 if 1 <= month <= 6 else 2
 
 def listen_for_transactions():
-    # Agregación por cliente: {client_id: {(year, semester, store_id): total_payment}}
-    client_semester_store_stats = defaultdict(lambda: defaultdict(float))
-    # Track END messages per client: {client_id: count}
-    client_end_messages = defaultdict(int)
+    client_semester_store_stats, client_end_messages, recovered_rows = recover_state_from_disk()
     processed_rows = 0
     completed_clients = set()
-    
+    processed_message_ids = set()
+
+    # Process recovered rows
+    for row in recovered_rows:
+        try:
+            dic_fields_row = row_to_dict(row, CSV_TYPES_REVERSE['transactions'])
+            created_at = dic_fields_row['created_at']
+            datetime_obj = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S")
+            year = datetime_obj.year
+            month = datetime_obj.month
+            semester = get_semester(month)
+            store_id = str(dic_fields_row['store_id'])
+            payment_value = float(dic_fields_row.get('final_amount', 0.0))
+            client_id = dic_fields_row['client_id']
+
+            if payment_value > 0:
+                key = (year, semester, store_id)
+                client_semester_store_stats[client_id][key] += payment_value
+                processed_rows += 1
+        except Exception as e:
+            print(f"[categorizer_q3] ERROR processing recovered row: {e}", file=sys.stderr)
+
     # Get routing keys for this worker
     worker_routing_keys = SEMESTER_MAPPING.get(WORKER_INDEX, [])
     if not worker_routing_keys:
         print(f"[categorizer_q3] No routing keys for worker {WORKER_INDEX}", file=sys.stderr)
         return client_semester_store_stats
-    
+
     print(f"[categorizer_q3] Worker {WORKER_INDEX} will handle routing keys: {worker_routing_keys}", flush=True)
     print(f"[categorizer_q3] About to create MessageMiddlewareExchange with exchange: {RECEIVER_EXCHANGE}", flush=True)
     
@@ -105,80 +131,84 @@ def listen_for_transactions():
     
     print(f"[categorizer_q3] Worker {WORKER_INDEX} listening for transactions on exchange: {RECEIVER_EXCHANGE} with routing keys: {worker_routing_keys}")
 
-    def on_message_callback(message: bytes):
-        nonlocal processed_rows, completed_clients
+    def on_message_callback(message: bytes, delivery_tag=None, channel=None):
+        nonlocal processed_rows, completed_clients, processed_message_ids
         try:
             parsed_message = parse_message(message)
-            type_of_message = parsed_message['csv_type']  
+            message_id = parsed_message.get('message_id')  # Assume each message has a unique 'message_id'
+            type_of_message = parsed_message['csv_type']
             client_id = parsed_message['client_id']
             is_last = parsed_message['is_last']
-            
-            #print(f"[categorizer_q3] Worker {WORKER_INDEX} processing message for client {client_id}, is_last: {is_last}, rows: {len(parsed_message['rows'])}", flush=True)
 
-            # Handle END messages per client BEFORE checking completed_clients
+            # Check if the message has already been processed
+            if message_id in processed_message_ids:
+                print(f"[categorizer_q3] Worker {WORKER_INDEX} ignoring repeated message with ID: {message_id}")
+                if channel and delivery_tag:
+                    channel.basic_ack(delivery_tag=delivery_tag)  # Acknowledge the message
+                return
+
+            # Mark the message as processed
+            processed_message_ids.add(message_id)
+
+            # Handle END messages
             if is_last:
                 client_end_messages[client_id] += 1
                 print(f"[categorizer_q3] Worker {WORKER_INDEX} received END message {client_end_messages[client_id]}/{NUMBER_OF_HOUR_WORKERS} for client {client_id}", flush=True)
-                
-                # Mark client as completed immediately when all END messages received
                 if client_end_messages[client_id] >= NUMBER_OF_HOUR_WORKERS:
                     if client_id not in completed_clients:
-                        print(f"[categorizer_q3] Worker {WORKER_INDEX} completed all data for client {client_id}, sending results", flush=True)
                         completed_clients.add(client_id)
-                        
-                        # Send results for this client
                         send_client_results(client_id, client_semester_store_stats[client_id])
-                        
-                        # Don't delete client data yet - keep it for potential debugging
-                        # but mark as completed
                         print(f"[categorizer_q3] Client {client_id} processing completed")
-            
-            # Skip if client already completed - check AFTER processing END message
+
+            # Skip if client already completed
             if client_id in completed_clients:
-                print(f"[categorizer_q3] Worker {WORKER_INDEX} ignoring message from already completed client {client_id}")
                 return
 
-            # Process regular rows
+            # Process rows
+            batch_rows = []
             for row in parsed_message['rows']:
-                try:
-                    dic_fields_row = row_to_dict(row, type_of_message)
-                    
-                    # Extract transaction data
-                    created_at = dic_fields_row['created_at']
-                    datetime_obj = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S")
-                    year = datetime_obj.year
-                    month = datetime_obj.month
-                    semester = get_semester(month)
-                    store_id = str(dic_fields_row['store_id'])
-                    payment_value = float(dic_fields_row.get('final_amount', 0.0))
-                    
-                    if payment_value > 0:
-                        key = (year, semester, store_id)
-                        client_semester_store_stats[client_id][key] += payment_value
-                        processed_rows += 1
-                        
-                    elif payment_value == 0.0:
-                        print(f"[categorizer_q3] Warning: Payment value is 0.0 for row: {row}", file=sys.stderr)
-                        
-                except Exception as row_error:
-                    print(f"[categorizer_q3] Error processing row: {row_error}", file=sys.stderr)
-                    continue
+                batch_rows.append(row)
+                dic_fields_row = row_to_dict(row, type_of_message)
+                created_at = dic_fields_row['created_at']
+                datetime_obj = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S")
+                year = datetime_obj.year
+                month = datetime_obj.month
+                semester = get_semester(month)
+                store_id = str(dic_fields_row['store_id'])
+                payment_value = float(dic_fields_row.get('final_amount', 0.0))
+
+                if payment_value > 0:
+                    key = (year, semester, store_id)
+                    client_semester_store_stats[client_id][key] += payment_value
+                    processed_rows += 1
+
+            # Append rows to disk
+            append_transaction_rows_to_disk(batch_rows)
+
+            # Save state every 100 rows
+            if processed_rows >= 100:
+                save_state_to_disk(client_semester_store_stats, client_end_messages)
+                processed_rows = 0
+
+            # Send acknowledgment after successful processing
+            if channel and delivery_tag:
+                channel.basic_ack(delivery_tag=delivery_tag)
+                print(f"[categorizer_q3] Worker {WORKER_INDEX} acknowledged message")
+
         except Exception as e:
-            print(f"[categorizer_q3] Error processing transaction message: {e}", file=sys.stderr)
+            print(f"[categorizer_q3] ERROR processing message: {e}", file=sys.stderr)
+            # Optionally, reject the message if processing fails
+            if channel and delivery_tag:
+                channel.basic_nack(delivery_tag=delivery_tag, requeue=True)
+                print(f"[categorizer_q3] Worker {WORKER_INDEX} rejected message")
 
     try:
-        print("[categorizer_q3] Starting to consume messages...", flush=True)
         topic_middleware.start_consuming(on_message_callback)
-        print("[categorizer_q3] start_consuming finished unexpectedly", flush=True)
-    except MessageMiddlewareDisconnectedError:
-        print("[categorizer_q3] Disconnected from middleware.", file=sys.stderr)
-    except MessageMiddlewareMessageError:
-        print("[categorizer_q3] Message error in middleware.", file=sys.stderr)
     except Exception as e:
-        print(f"[categorizer_q3] Unexpected error while consuming: {e}", file=sys.stderr)
+        print(f"[categorizer_q3] ERROR while consuming messages: {e}", file=sys.stderr)
     finally:
         topic_middleware.close()
-        # fanout_middleware.close()
+
     return client_semester_store_stats
 
 def send_client_results(client_id, semester_store_stats):
@@ -224,13 +254,125 @@ def send_results_to_gateway(semester_store_stats):
         print(f"[categorizer_q3] ERROR in send_results_to_gateway: {e}")
         raise e
 
+def save_state_to_disk(client_semester_store_stats, client_end_messages):
+    """
+    Saves the client_semester_store_stats and client_end_messages to disk atomically.
+    Writes to an auxiliary file first, then renames it to the main backup file.
+    """
+    try:
+        os.makedirs(PERSISTENCE_DIR, exist_ok=True)
+        serializable_data = {
+            "semester_store_stats": {
+                client_id: {
+                    f"{year},{semester},{store_id}": total_payment
+                    for (year, semester, store_id), total_payment in semester_store_stats.items()
+                }
+                for client_id, semester_store_stats in client_semester_store_stats.items()
+            },
+            "end_messages": dict(client_end_messages)
+        }
+        # Write to the auxiliary file
+        with open(AUXILIARY_FILE, "w") as aux_file:
+            json.dump(serializable_data, aux_file, indent=4)
+            aux_file.write("\n")  # Separate JSON from rows
+        # Rename the auxiliary file to the main backup file
+        os.rename(AUXILIARY_FILE, BACKUP_FILE)
+        print(f"[categorizer_q3] Worker {WORKER_INDEX} saved state to {BACKUP_FILE} atomically")
+    except Exception as e:
+        print(f"[categorizer_q3] ERROR saving state to disk: {e}", file=sys.stderr)
+
+def append_transaction_rows_to_disk(rows):
+    """
+    Appends transaction rows to the backup file, one row per line.
+    """
+    try:
+        with open(BACKUP_FILE, "a") as backup_file:
+            for row in rows:
+                backup_file.write(row + "\n")  # Write each row on a new line
+        print(f"[categorizer_q3] Worker {WORKER_INDEX} appended {len(rows)} rows to {BACKUP_FILE}")
+    except Exception as e:
+        print(f"[categorizer_q3] ERROR appending transaction rows to disk: {e}", file=sys.stderr)
+
+def recover_state_from_disk():
+    """
+    Recovers the client_semester_store_stats, client_end_messages, and transaction rows from disk.
+    If the auxiliary file exists, discard it and use the main backup file.
+    Detects and deletes corrupted rows during recovery.
+    """
+    client_semester_store_stats = defaultdict(lambda: defaultdict(float))
+    client_end_messages = defaultdict(int)
+    valid_rows = []
+
+    # Check if the auxiliary file exists
+    if os.path.exists(AUXILIARY_FILE):
+        print(f"[categorizer_q3] Worker {WORKER_INDEX} detected auxiliary file {AUXILIARY_FILE}, discarding it")
+        os.remove(AUXILIARY_FILE)  # Discard the auxiliary file
+
+    if not os.path.exists(BACKUP_FILE):
+        print(f"[categorizer_q3] Worker {WORKER_INDEX} no backup file found, starting fresh")
+        return client_semester_store_stats, client_end_messages, valid_rows
+
+    try:
+        with open(BACKUP_FILE, "r") as backup_file:
+            lines = backup_file.readlines()
+            if lines:
+                # Restore dictionaries from the first line (JSON)
+                json_data = lines[0]
+                data = json.loads(json_data)
+                # Restore semester store stats
+                client_semester_store_stats = defaultdict(
+                    lambda: defaultdict(float),
+                    {
+                        client_id: {
+                            tuple(key.split(",")): total_payment
+                            for key, total_payment in semester_store_stats.items()
+                        }
+                        for client_id, semester_store_stats in data["semester_store_stats"].items()
+                    }
+                )
+                # Restore end messages
+                client_end_messages = defaultdict(int, data["end_messages"])
+                print(f"[categorizer_q3] Worker {WORKER_INDEX} recovered state from {BACKUP_FILE}")
+
+                # Validate and restore transaction rows from the remaining lines
+                for line in lines[1:]:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        # Validate the row (e.g., check if it can be parsed)
+                        dic_fields_row = row_to_dict(line, CSV_TYPES_REVERSE['transactions'])
+                        created_at = dic_fields_row['created_at']
+                        datetime_obj = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S")
+                        year = datetime_obj.year
+                        month = datetime_obj.month
+                        semester = get_semester(month)
+                        store_id = str(dic_fields_row['store_id'])
+                        payment_value = float(dic_fields_row.get('final_amount', 0.0))
+                        client_id = dic_fields_row['client_id']
+
+                        if payment_value > 0:
+                            key = (year, semester, store_id)
+                            client_semester_store_stats[client_id][key] += payment_value
+                        valid_rows.append(line)  # Add valid row to the list
+                    except Exception as e:
+                        print(f"[categorizer_q3] Corrupted row detected and skipped: {line}", file=sys.stderr)
+
+        # Rewrite the backup file with only valid rows
+        save_state_to_disk(client_semester_store_stats, client_end_messages)
+        append_transaction_rows_to_disk(valid_rows)
+        print(f"[categorizer_q3] Worker {WORKER_INDEX} cleaned up corrupted rows and updated {BACKUP_FILE}")
+
+    except Exception as e:
+        print(f"[categorizer_q3] ERROR recovering state from {BACKUP_FILE}: {e}", file=sys.stderr)
+
+    return client_semester_store_stats, client_end_messages, valid_rows
+
 def main():
     signal.signal(signal.SIGTERM, _sigterm_handler)
     signal.signal(signal.SIGINT, _sigterm_handler)
-
     health_check_receiver = HealthCheckReceiver()
     health_check_receiver.start()
-
     print("[categorizer_q3] MAIN FUNCTION STARTED", flush=True)
     try:
         print("[categorizer_q3] Waiting for RabbitMQ to be ready...", flush=True)
@@ -238,7 +380,7 @@ def main():
         print("[categorizer_q3] Starting worker...", flush=True)
         print("[categorizer_q3] About to call listen_for_transactions()...", flush=True)
         
-        client_semester_store_stats = listen_for_transactions()
+        listen_for_transactions()
         print("[categorizer_q3] listen_for_transactions() completed - all clients processed", flush=True)
         print("[categorizer_q3] Worker completed successfully.", flush=True)
         

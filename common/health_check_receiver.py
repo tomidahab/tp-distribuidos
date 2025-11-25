@@ -10,13 +10,13 @@ class HealthCheckReceiver(threading.Thread):
         self.skt.listen(1)
 
     def handle_checker(self, checker_skt):
-        print("Health checker connected, handling messages", flush=True)        
+        ## print("Health checker connected, handling messages", flush=True)        
         while True:
             alive_msg = recv_int(checker_skt)
             send_int(checker_skt, 1)
     
     def run(self):            
-        print("Start handling health connections", flush=True)
+        ## print("Start handling health connections", flush=True)
         while True:
             try:
                 c, addr = self.skt.accept()
