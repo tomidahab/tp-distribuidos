@@ -60,6 +60,12 @@ message_counter = 0
 # Track processed messages to avoid duplicates during recovery
 processed_message_ids = set()
 
+# Statistics for debugging
+total_messages_received = 0
+end_messages_by_client = defaultdict(int)  # client_id -> count of END messages
+end_messages_by_sender = defaultdict(int)  # sender -> count of END messages
+messages_by_client = defaultdict(int)      # client_id -> total messages
+
 def _close_queue(queue):
     if queue:
         queue.close()
@@ -196,7 +202,7 @@ def save_state_to_disk():
             # keep a newline so appended messages start on the next line
             backup_file.write("\n")
 
-        print(f"[categorizer_q2] Worker {WORKER_INDEX} saved complete state to {BACKUP_FILE}")
+        #print(f"[categorizer_q2] Worker {WORKER_INDEX} saved complete state to {BACKUP_FILE}")
     except Exception as e:
         print(f"[categorizer_q2] ERROR saving state to disk: {e}", file=sys.stderr)
         raise e
@@ -300,12 +306,14 @@ def recover_state_from_disk():
         # Restore end messages
         global_client_end_messages = defaultdict(int, state_data["end_messages"])
         
-        print(f"[categorizer_q2] Worker {WORKER_INDEX} recovered state from disk")
+        print(f"📂 [WORKER {WORKER_INDEX}] recovered state from disk - END messages: {dict(global_client_end_messages)}")
         
         # Process pending messages ONLY if there are any
         if messages_part:
             message_lines = [line.strip() for line in messages_part.split('\n') if line.strip()]
             processed_count = 0
+            recovered_end_by_client = defaultdict(int)
+            recovered_end_by_sender = defaultdict(int)
             
             for line in message_lines:
                 try:
@@ -313,14 +321,22 @@ def recover_state_from_disk():
                     # Add to processed set to avoid reprocessing
                     message_id = parsed_message.get('message_id', '')
                     sender = parsed_message.get('sender', 'unknown')
+                    client_id = parsed_message.get('client_id', 'unknown')
                     processed_message_ids.add(f"{sender}:{message_id}")
+                    
+                    # Count END messages during recovery
+                    if parsed_message.get('is_last', False):
+                        recovered_end_by_client[client_id] += 1
+                        recovered_end_by_sender[sender] += 1
                     
                     process_recovered_message(parsed_message)
                     processed_count += 1
                 except Exception as e:
                     print(f"[categorizer_q2] ERROR processing recovered message: {e}", file=sys.stderr)
             
-            print(f"[categorizer_q2] Worker {WORKER_INDEX} processed {processed_count} pending messages")
+            total_recovered_ends = sum(recovered_end_by_client.values())
+            print(f"📦 [WORKER {WORKER_INDEX}] processed {processed_count} pending messages ({total_recovered_ends} were END messages)")
+            print(f"📦 [WORKER {WORKER_INDEX}] RECOVERY STATS - END by client: {dict(recovered_end_by_client)}, END by sender: {dict(recovered_end_by_sender)}")
             
             # Reset message counter to continue from where we left off
             message_counter = processed_count
@@ -332,7 +348,7 @@ def recover_state_from_disk():
         else:
             # No pending messages, just use the recovered state
             message_counter = 0
-            print(f"[categorizer_q2] Worker {WORKER_INDEX} no pending messages to process")
+            print(f"📦 [WORKER {WORKER_INDEX}] no pending messages to process")
         
         return items, 0
         
@@ -365,9 +381,8 @@ def process_recovered_message(parsed_message):
         global_client_sales_stats[client_id][(item_id, year, month)]['count'] += 1
         global_client_sales_stats[client_id][(item_id, year, month)]['sum'] += profit
     
-    # Handle END messages
-    if is_last:
-        global_client_end_messages[client_id] += 1
+    # NO increment END messages here - they are already included in the recovered state JSON
+    # The END message count is restored from the JSON state, not from processing pending messages
 
 def listen_for_sales(items, topic_middleware):
     global global_client_sales_stats, global_client_end_messages, message_counter
@@ -376,8 +391,11 @@ def listen_for_sales(items, topic_middleware):
     completed_clients = set()
 
     def on_message_callback(message: bytes, delivery_tag, channel):
-        global message_counter, processed_message_ids
+        global message_counter, processed_message_ids, total_messages_received, end_messages_by_client, end_messages_by_sender, messages_by_client
         nonlocal completed_clients
+        
+        total_messages_received += 1
+        
         try:
             parsed_message = parse_message(message)
             type_of_message = parsed_message['csv_type']
@@ -386,16 +404,19 @@ def listen_for_sales(items, topic_middleware):
             message_id = parsed_message.get('message_id', '')
             sender = parsed_message.get('sender', 'unknown')
 
+            # Count messages per client
+            messages_by_client[client_id] += 1
+
             # Skip if already processed (duplicate detection)
             duplicate_key = f"{sender}:{message_id}"
             if duplicate_key in processed_message_ids:
-                print(f"[categorizer_q2] Worker {WORKER_INDEX} DUPLICATE message detected: {duplicate_key} - skipping")
+                # print(f"[categorizer_q2] Worker {WORKER_INDEX} DUPLICATE message detected: {duplicate_key} - skipping")
                 channel.basic_ack(delivery_tag=delivery_tag)
                 return
 
             # Skip if client already completed
             if client_id in completed_clients:
-                print(f"[categorizer_q2] Worker {WORKER_INDEX} ignoring message for already completed client {client_id}")
+                # print(f"[categorizer_q2] Worker {WORKER_INDEX} ignoring message for already completed client {client_id}")
                 channel.basic_ack(delivery_tag=delivery_tag)
                 return
 
@@ -413,8 +434,13 @@ def listen_for_sales(items, topic_middleware):
 
             # Handle END messages
             if is_last:
+                end_messages_by_client[client_id] += 1
+                end_messages_by_sender[sender] += 1
                 client_end_messages[client_id] += 1
-                print(f"[categorizer_q2] Worker {WORKER_INDEX} received END message {client_end_messages[client_id]}/{NUMBER_OF_YEAR_WORKERS} for client {client_id}")
+                print(f"🔴 [WORKER {WORKER_INDEX}] RECEIVED END MESSAGE for client {client_id} from sender {sender}")
+                print(f"📊 [WORKER {WORKER_INDEX}] STATS - Client {client_id}: END count: {client_end_messages[client_id]}/{NUMBER_OF_YEAR_WORKERS}")
+                print(f"📊 [WORKER {WORKER_INDEX}] DETAILED STATS - END by client: {dict(end_messages_by_client)}, END by sender: {dict(end_messages_by_sender)}")
+                print(f"📊 [WORKER {WORKER_INDEX}] MESSAGE STATS - Total: {total_messages_received}, By client: {dict(messages_by_client)}")
 
             # CRITICAL PERSISTENCE FLOW:
             # 1. Mark as processed to avoid duplicates
@@ -432,13 +458,13 @@ def listen_for_sales(items, topic_middleware):
             # 5. Save complete state every 100 messages OR on END messages
             if message_counter % 100 == 0 or is_last:
                 save_state_to_disk()
-                print(f"[categorizer_q2] Worker {WORKER_INDEX} saved state at message {message_counter}")
+                # print(f"[categorizer_q2] Worker {WORKER_INDEX} saved state at message {message_counter}")
 
             # 6. Check if client is complete (after state is saved)
             if is_last and client_end_messages[client_id] >= NUMBER_OF_YEAR_WORKERS:
                 completed_clients.add(client_id)
                 send_client_q2_results(client_id, global_client_sales_stats[client_id], items)
-                print(f"[categorizer_q2] Client {client_id} processing completed")
+                print(f"✅ [WORKER {WORKER_INDEX}] Client {client_id} processing COMPLETED - sending results!")
 
         except Exception as e:
             print(f"[categorizer_q2] ERROR processing sales message: {e}", file=sys.stderr)
@@ -455,7 +481,19 @@ def listen_for_sales(items, topic_middleware):
         topic_middleware.close()
 
 def get_top_products_per_year_month(sales_stats, items):
-    id_to_name = {item['item_id']: item['item_name'] for item in items}
+    print(f"🐞 [DEBUG] Processing {len(sales_stats)} sales stats with {len(items)} items")
+    
+    if items:
+        print(f"🐞 [DEBUG] Sample item: {items[0]}")
+        print(f"🐞 [DEBUG] Item keys: {list(items[0].keys()) if items else 'NO ITEMS'}")
+    
+    id_to_name = {str(item['item_id']): item['item_name'] for item in items}
+    print(f"🐞 [DEBUG] Created mapping for {len(id_to_name)} items")
+    
+    if sales_stats:
+        sample_key = list(sales_stats.keys())[0]
+        print(f"🐞 [DEBUG] Sample sales_stats key: {sample_key}, type of item_id: {type(sample_key[0])}")
+    
     # {(year, month): [ {item_id, count, sum} ]}
     year_month_stats = defaultdict(list)
     for (item_id, year, month), stats in sales_stats.items():
@@ -518,16 +556,11 @@ def main():
         
         # STEP 1: Recover state and process pending messages
         items, processed_count = recover_state_from_disk()
+        print(f"🚀 [WORKER {WORKER_INDEX}] STARTUP STATS - END messages in state: {dict(global_client_end_messages)}")
+        print(f"🚀 [WORKER {WORKER_INDEX}] STARTUP STATS - Total messages: {total_messages_received}, END by client: {dict(end_messages_by_client)}, END by sender: {dict(end_messages_by_sender)}")
         print(f"[categorizer_q2] Worker {WORKER_INDEX} recovered state, processed {processed_count} pending messages")
 
-        # STEP 2: If no items were recovered, collect them
-        if not items:
-            print(f"[categorizer_q2] Worker {WORKER_INDEX} collecting menu items...")
-            items = listen_for_items()
-            save_menu_items_to_disk(items)
-            print(f"[categorizer_q2] Worker {WORKER_INDEX} collected {len(items)} menu items")
-
-        # STEP 3: Wait for RabbitMQ and setup connections
+        # STEP 2: Wait for RabbitMQ and setup connections FIRST
         print("[categorizer_q2] Waiting for RabbitMQ to be ready...")
         time.sleep(30)  # Esperar a que RabbitMQ esté listo
         
@@ -535,6 +568,13 @@ def main():
         global topic_middleware
         topic_middleware = setup_queue_and_exchanges()
         print("[categorizer_q2] Queues and exchanges setup completed.")
+
+        # STEP 3: If no items were recovered, collect them AFTER RabbitMQ is ready
+        if not items:
+            print(f"[categorizer_q2] Worker {WORKER_INDEX} collecting menu items...")
+            items = listen_for_items()
+            save_menu_items_to_disk(items)
+            print(f"[categorizer_q2] Worker {WORKER_INDEX} collected {len(items)} menu items")
         
         # STEP 4: Start consuming new messages with manual ACK
         listen_for_sales(items, topic_middleware)
