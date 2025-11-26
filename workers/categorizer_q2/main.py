@@ -66,6 +66,9 @@ end_messages_by_client = defaultdict(int)  # client_id -> count of END messages
 end_messages_by_sender = defaultdict(int)  # sender -> count of END messages
 messages_by_client = defaultdict(int)      # client_id -> total messages
 
+# Initialization flag to prevent race conditions
+persistence_initialized = False
+
 def _close_queue(queue):
     if queue:
         queue.close()
@@ -74,6 +77,42 @@ def _sigterm_handler(signum, _):
     _close_queue(topic_middleware)
     _close_queue(items_exchange)
     _close_queue(gateway_result_queue)
+
+def ensure_persistence_initialized():
+    """
+    Ensures persistence is ready and safe to use. This prevents race conditions
+    where messages arrive before initialization is complete.
+    """
+    global persistence_initialized
+    if not persistence_initialized:
+        try:
+            # Create persistence directory if it doesn't exist
+            os.makedirs(PERSISTENCE_DIR, exist_ok=True)
+            
+            # Ensure backup file exists (even if empty)
+            if not os.path.exists(BACKUP_FILE):
+                with open(BACKUP_FILE, "w") as f:
+                    json.dump({
+                        "sales_stats": {},
+                        "end_messages": {}
+                    }, f, indent=4)
+                    f.write("\n")
+                print(f"🔧 [WORKER {WORKER_INDEX}] Created initial backup file: {BACKUP_FILE}")
+            
+            # Ensure menu items file exists (even if empty)
+            if not os.path.exists(MENU_ITEMS_FILE):
+                with open(MENU_ITEMS_FILE, "w") as f:
+                    json.dump([], f)
+                print(f"🔧 [WORKER {WORKER_INDEX}] Created initial menu items file: {MENU_ITEMS_FILE}")
+                
+            persistence_initialized = True
+            print(f"✅ [WORKER {WORKER_INDEX}] Persistence initialization completed")
+            
+        except Exception as e:
+            print(f"❌ [WORKER {WORKER_INDEX}] ERROR initializing persistence: {e}", file=sys.stderr)
+            # Don't raise - let it try again later
+    
+    return persistence_initialized
 
 def get_months_for_worker(worker_index, total_workers):
     months = list(range(1, 13))
@@ -182,8 +221,9 @@ def save_state_to_disk():
     global global_client_sales_stats, global_client_end_messages
     
     try:
-        # Create persistence directory if it doesn't exist
-        os.makedirs(PERSISTENCE_DIR, exist_ok=True)
+        if not ensure_persistence_initialized():
+            print(f"⚠️  [WORKER {WORKER_INDEX}] Cannot save state - persistence not ready", file=sys.stderr)
+            return
         
         serializable_data = {
             "sales_stats": {
@@ -202,9 +242,9 @@ def save_state_to_disk():
             # keep a newline so appended messages start on the next line
             backup_file.write("\n")
 
-        #print(f"[categorizer_q2] Worker {WORKER_INDEX} saved complete state to {BACKUP_FILE}")
+        print(f"💾 [WORKER {WORKER_INDEX}] Saved complete state to {BACKUP_FILE} - END messages: {dict(global_client_end_messages)}")
     except Exception as e:
-        print(f"[categorizer_q2] ERROR saving state to disk: {e}", file=sys.stderr)
+        print(f"❌ [WORKER {WORKER_INDEX}] ERROR saving state to disk: {e}", file=sys.stderr)
         raise e
 
 def append_message_to_disk(parsed_message):
@@ -212,15 +252,16 @@ def append_message_to_disk(parsed_message):
     Appends a processed message to the backup file for recovery.
     """
     try:
-        # Create persistence directory if it doesn't exist
-        os.makedirs(PERSISTENCE_DIR, exist_ok=True)
+        if not ensure_persistence_initialized():
+            print(f"⚠️  [WORKER {WORKER_INDEX}] Cannot append message - persistence not ready", file=sys.stderr)
+            return
         
         with open(BACKUP_FILE, "a") as backup_file:
             json.dump(parsed_message, backup_file)
             backup_file.write("\n")
-        #print(f"[categorizer_q2] Worker {WORKER_INDEX} appended message to disk")
+        print(f"📝 [WORKER {WORKER_INDEX}] Appended message {parsed_message.get('message_id', 'NO-ID')} from {parsed_message.get('sender', 'NO-SENDER')} to disk")
     except Exception as e:
-        print(f"[categorizer_q2] ERROR appending message to disk: {e}", file=sys.stderr)
+        print(f"❌ [WORKER {WORKER_INDEX}] ERROR appending message to disk: {e}", file=sys.stderr)
         raise e
 
 def save_menu_items_to_disk(items):
@@ -228,8 +269,9 @@ def save_menu_items_to_disk(items):
     Saves the menu items to a separate file.
     """
     try:
-        # Create persistence directory if it doesn't exist
-        os.makedirs(PERSISTENCE_DIR, exist_ok=True)
+        if not ensure_persistence_initialized():
+            print(f"⚠️  [WORKER {WORKER_INDEX}] Cannot save menu items - persistence not ready", file=sys.stderr)
+            return
         
         with open(MENU_ITEMS_FILE, "w") as items_file:
             json.dump(items, items_file, indent=4)
@@ -315,6 +357,8 @@ def recover_state_from_disk():
             recovered_end_by_client = defaultdict(int)
             recovered_end_by_sender = defaultdict(int)
             
+            print(f"📦 [WORKER {WORKER_INDEX}] Found {len(message_lines)} pending messages to process")
+            
             for line in message_lines:
                 try:
                     parsed_message = json.loads(line)
@@ -322,7 +366,10 @@ def recover_state_from_disk():
                     message_id = parsed_message.get('message_id', '')
                     sender = parsed_message.get('sender', 'unknown')
                     client_id = parsed_message.get('client_id', 'unknown')
-                    processed_message_ids.add(f"{sender}:{message_id}")
+                    duplicate_key = f"{sender}:{message_id}"
+                    processed_message_ids.add(duplicate_key)
+                    
+                    print(f"📦 [WORKER {WORKER_INDEX}] Processing pending message {duplicate_key} (client: {client_id})")
                     
                     # Count END messages during recovery
                     if parsed_message.get('is_last', False):
@@ -332,11 +379,12 @@ def recover_state_from_disk():
                     process_recovered_message(parsed_message)
                     processed_count += 1
                 except Exception as e:
-                    print(f"[categorizer_q2] ERROR processing recovered message: {e}", file=sys.stderr)
+                    print(f"❌ [WORKER {WORKER_INDEX}] ERROR processing recovered message: {e}", file=sys.stderr)
             
             total_recovered_ends = sum(recovered_end_by_client.values())
             print(f"📦 [WORKER {WORKER_INDEX}] processed {processed_count} pending messages ({total_recovered_ends} were END messages)")
             print(f"📦 [WORKER {WORKER_INDEX}] RECOVERY STATS - END by client: {dict(recovered_end_by_client)}, END by sender: {dict(recovered_end_by_sender)}")
+            print(f"📦 [WORKER {WORKER_INDEX}] Total processed_message_ids: {len(processed_message_ids)}")
             
             # Reset message counter to continue from where we left off
             message_counter = processed_count
@@ -394,6 +442,13 @@ def listen_for_sales(items, topic_middleware):
         global message_counter, processed_message_ids, total_messages_received, end_messages_by_client, end_messages_by_sender, messages_by_client
         nonlocal completed_clients
         
+        # Verify persistence is ready before processing any message
+        if not ensure_persistence_initialized():
+            print(f"⚠️  [WORKER {WORKER_INDEX}] Rejecting message - persistence not initialized yet (will NACK and requeue)", file=sys.stderr)
+            # NACK the message to requeue it
+            channel.basic_nack(delivery_tag=delivery_tag, requeue=True)
+            return
+        
         total_messages_received += 1
         
         try:
@@ -410,13 +465,13 @@ def listen_for_sales(items, topic_middleware):
             # Skip if already processed (duplicate detection)
             duplicate_key = f"{sender}:{message_id}"
             if duplicate_key in processed_message_ids:
-                # print(f"[categorizer_q2] Worker {WORKER_INDEX} DUPLICATE message detected: {duplicate_key} - skipping")
+                print(f"🔄 [WORKER {WORKER_INDEX}] DUPLICATE message detected: {duplicate_key} - skipping")
                 channel.basic_ack(delivery_tag=delivery_tag)
                 return
 
             # Skip if client already completed
             if client_id in completed_clients:
-                # print(f"[categorizer_q2] Worker {WORKER_INDEX} ignoring message for already completed client {client_id}")
+                print(f"🚫 [WORKER {WORKER_INDEX}] ignoring message for already completed client {client_id}")
                 channel.basic_ack(delivery_tag=delivery_tag)
                 return
 
@@ -445,6 +500,7 @@ def listen_for_sales(items, topic_middleware):
             # CRITICAL PERSISTENCE FLOW:
             # 1. Mark as processed to avoid duplicates
             processed_message_ids.add(duplicate_key)
+            print(f"✅ [WORKER {WORKER_INDEX}] Processing message {duplicate_key} (total in set: {len(processed_message_ids)})")
             
             # 2. Save message to disk (always)
             append_message_to_disk(parsed_message)
@@ -458,7 +514,7 @@ def listen_for_sales(items, topic_middleware):
             # 5. Save complete state every 100 messages OR on END messages
             if message_counter % 100 == 0 or is_last:
                 save_state_to_disk()
-                # print(f"[categorizer_q2] Worker {WORKER_INDEX} saved state at message {message_counter}")
+                print(f"💾 [WORKER {WORKER_INDEX}] Saved state at message {message_counter} (is_last={is_last})")
 
             # 6. Check if client is complete (after state is saved)
             if is_last and client_end_messages[client_id] >= NUMBER_OF_YEAR_WORKERS:
@@ -553,6 +609,9 @@ def main():
 
     try:
         print(f"[categorizer_q2] Worker {WORKER_INDEX} starting...")
+        
+        # STEP 0: Ensure persistence is ready for crash recovery
+        ensure_persistence_initialized()
         
         # STEP 1: Recover state and process pending messages
         items, processed_count = recover_state_from_disk()
