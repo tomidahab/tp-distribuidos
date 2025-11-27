@@ -5,6 +5,7 @@ from collections import defaultdict
 import time
 from datetime import datetime
 import json
+import traceback
 
 from common.health_check_receiver import HealthCheckReceiver
 from common.protocol import create_response_message
@@ -125,6 +126,9 @@ def setup_queue_and_exchanges():
     months = get_months_for_worker(WORKER_INDEX, TOTAL_WORKERS)
     topic_keys = [f"month.{month}" for month in months]
 
+    print(f"🔧 [WORKER {WORKER_INDEX}] Setup - Worker {WORKER_INDEX}/{TOTAL_WORKERS} assigned months: {months}")
+    print(f"🔧 [WORKER {WORKER_INDEX}] Setup - topic_keys: {topic_keys}")
+
     topic_middleware = MessageMiddlewareExchange(
         host=RABBITMQ_HOST,
         exchange_name=TOPIC_EXCHANGE,
@@ -236,11 +240,14 @@ def save_state_to_disk():
             "end_messages": dict(global_client_end_messages)
         }
         
+        total_entries = sum(len(stats) for stats in serializable_data["sales_stats"].values())
+        print(f"💾 [WORKER {WORKER_INDEX}] Saving state with {total_entries} sales entries and END messages: {serializable_data['end_messages']}")
+        
         # Rewrite entire file with current state
         with open(BACKUP_FILE, "w") as backup_file:
             json.dump(serializable_data, backup_file, indent=4)
-            # keep a newline so appended messages start on the next line
-            backup_file.write("\n")
+            # Separador único para dividir JSON principal de mensajes appendeados
+            backup_file.write("\n--- APPENDED_MESSAGES ---\n")
 
         print(f"💾 [WORKER {WORKER_INDEX}] Saved complete state to {BACKUP_FILE} - END messages: {dict(global_client_end_messages)}")
     except Exception as e:
@@ -292,63 +299,102 @@ def recover_state_from_disk():
     pending_messages = []
     items = []
     
+    print(f"🔄 [RECOVERY] Worker {WORKER_INDEX} STARTING RECOVERY PROCESS")
+    
     # First try to recover items
     if os.path.exists(MENU_ITEMS_FILE):
         try:
             with open(MENU_ITEMS_FILE, "r") as items_file:
                 items = json.load(items_file)
-                print(f"[categorizer_q2] Worker {WORKER_INDEX} recovered {len(items)} menu items")
+                print(f"🔄 [RECOVERY] Worker {WORKER_INDEX} recovered {len(items)} menu items from {MENU_ITEMS_FILE}")
         except Exception as e:
-            print(f"[categorizer_q2] ERROR recovering menu items: {e}", file=sys.stderr)
+            print(f"❌ [RECOVERY] ERROR recovering menu items: {e}", file=sys.stderr)
+    else:
+        print(f"🔄 [RECOVERY] Worker {WORKER_INDEX} no menu items file found at {MENU_ITEMS_FILE}")
     
     # Now recover state and pending messages
     if not os.path.exists(BACKUP_FILE):
-        print(f"[categorizer_q2] Worker {WORKER_INDEX} no backup file found, starting fresh")
+        print(f"🔄 [RECOVERY] Worker {WORKER_INDEX} no backup file found at {BACKUP_FILE}, starting fresh")
         return items, 0
     
     try:
         with open(BACKUP_FILE, "r") as backup_file:
             content = backup_file.read()
             
+        print(f"🔄 [RECOVERY] Worker {WORKER_INDEX} backup file size: {len(content)} characters")
+            
         if not content.strip():
-            print(f"[categorizer_q2] Worker {WORKER_INDEX} backup file is empty, starting fresh")
+            print(f"🔄 [RECOVERY] Worker {WORKER_INDEX} backup file is empty, starting fresh")
             return items, 0
         
-        # Find the last '}' to locate the end of the JSON state
-        last_brace_idx = content.rfind('}')
-        if last_brace_idx == -1:
-            print(f"[categorizer_q2] Worker {WORKER_INDEX} no valid JSON state found")
-            return items, 0
+        # Find the separator to divide JSON state from appended messages
+        separator = "\n--- APPENDED_MESSAGES ---\n"
+        separator_idx = content.find(separator)
+        print(f"🔄 [RECOVERY] Worker {WORKER_INDEX} separator found at position: {separator_idx}")
         
-        # Extract JSON state and pending messages
-        json_part = content[:last_brace_idx + 1]
-        messages_part = content[last_brace_idx + 1:].strip()
+        if separator_idx == -1:
+            print(f"❌ [RECOVERY] Worker {WORKER_INDEX} no separator found, treating entire file as JSON")
+            # Fallback: try to parse entire content as JSON
+            json_part = content.strip()
+            messages_part = ""
+        else:
+            # Extract JSON state and pending messages
+            json_part = content[:separator_idx].strip()
+            messages_part = content[separator_idx + len(separator):].strip()
+        
+        print(f"🔄 [RECOVERY] Worker {WORKER_INDEX} JSON part size: {len(json_part)} characters")
+        print(f"🔄 [RECOVERY] Worker {WORKER_INDEX} Messages part size: {len(messages_part)} characters")
         
         # Load the state
         state_data = json.loads(json_part)
+        print(f"🔄 [RECOVERY] Worker {WORKER_INDEX} loaded state successfully")
 
         # Normalize and restore sales stats (ensure year/month are ints)
         recovered_sales = {}
         for client_id, sales_stats in state_data.get("sales_stats", {}).items():
+            print(f"🔄 [RECOVERY] Worker {WORKER_INDEX} recovering sales stats for client {client_id}: {len(sales_stats)} entries")
             recovered_sales[client_id] = {}
             for key, stats in sales_stats.items():
                 try:
                     item_id, year_s, month_s = key.split(",")
-                    recovered_key = (str(item_id), int(year_s), int(month_s))
-                except Exception:
+                    # CRITICAL: item_id must be string, year and month must be int
+                    # This matches exactly how keys are created during normal processing
+                    recovered_key = (item_id, int(year_s), int(month_s))
+                    print(f"🔧 [RECOVERY] Worker {WORKER_INDEX} recovered key: {recovered_key} (type: {type(recovered_key[0])}, {type(recovered_key[1])}, {type(recovered_key[2])})")
+                except Exception as e:
+                    print(f"❌ [RECOVERY] Worker {WORKER_INDEX} ERROR parsing key '{key}': {e}", file=sys.stderr)
                     # fallback: keep as tuple of strings
                     recovered_key = tuple(key.split(","))
                 recovered_sales[client_id][recovered_key] = stats
 
         global_client_sales_stats = defaultdict(
-            lambda: defaultdict(lambda: {'count': int(0), 'sum': float(0.0)}),
-            recovered_sales
+            lambda: defaultdict(lambda: {'count': int(0), 'sum': float(0.0)})
         )
+        
+        # Restore recovered data ensuring proper defaultdict behavior
+        for client_id, sales_stats in recovered_sales.items():
+            # Force creation of defaultdict for this client
+            global_client_sales_stats[client_id].update(sales_stats)
+        
+        print(f"🔧 [RECOVERY] Worker {WORKER_INDEX} Converted {len(recovered_sales)} clients to proper defaultdict structure")
         
         # Restore end messages
         global_client_end_messages = defaultdict(int, state_data["end_messages"])
         
-        print(f"📂 [WORKER {WORKER_INDEX}] recovered state from disk - END messages: {dict(global_client_end_messages)}")
+        print(f"🔄 [RECOVERY] Worker {WORKER_INDEX} recovered state from disk - END messages: {dict(global_client_end_messages)}")
+        total_sales_entries = sum(len(stats) for stats in recovered_sales.values())
+        print(f"🔄 [RECOVERY] Worker {WORKER_INDEX} recovered {total_sales_entries} sales statistics entries")
+        
+        # DEBUG: Print the recovered dictionary structure to verify key types
+        print(f"🐞 [RECOVERY DEBUG] Worker {WORKER_INDEX} RECOVERED DICTIONARY STRUCTURE:")
+        for client_id, sales_stats in global_client_sales_stats.items():
+            print(f"🐞 [RECOVERY DEBUG] Client {client_id}: {len(sales_stats)} entries")
+            # Show first 3 keys as examples
+            sample_keys = list(sales_stats.keys())[:3]
+            for key in sample_keys:
+                print(f"🐞 [RECOVERY DEBUG]   Sample key: {key} (types: {type(key[0])}, {type(key[1])}, {type(key[2])}) -> {sales_stats[key]}")
+            if len(sales_stats) > 3:
+                print(f"🐞 [RECOVERY DEBUG]   ... and {len(sales_stats) - 3} more entries")
         
         # Process pending messages ONLY if there are any
         if messages_part:
@@ -500,30 +546,39 @@ def listen_for_sales(items, topic_middleware):
             # CRITICAL PERSISTENCE FLOW:
             # 1. Mark as processed to avoid duplicates
             processed_message_ids.add(duplicate_key)
-            print(f"✅ [WORKER {WORKER_INDEX}] Processing message {duplicate_key} (total in set: {len(processed_message_ids)})")
+            print(f"✅ [WORKER {WORKER_INDEX}] Added {duplicate_key} to processed set (total in set: {len(processed_message_ids)})")
             
             # 2. Save message to disk (always)
+            print(f"💾 [WORKER {WORKER_INDEX}] Appending message {duplicate_key} to disk")
             append_message_to_disk(parsed_message)
             
             # 3. ACK the message (only after successful disk write)
+            print(f"✅ [WORKER {WORKER_INDEX}] ACKing message {duplicate_key} (delivery_tag: {delivery_tag})")
             channel.basic_ack(delivery_tag=delivery_tag)
             
             # 4. Update message counter
             message_counter += 1
+            print(f"📊 [WORKER {WORKER_INDEX}] Message counter now: {message_counter}")
             
             # 5. Save complete state every 100 messages OR on END messages
             if message_counter % 100 == 0 or is_last:
+                print(f"💾 [WORKER {WORKER_INDEX}] Saving complete state (counter: {message_counter}, is_last: {is_last})")
                 save_state_to_disk()
-                print(f"💾 [WORKER {WORKER_INDEX}] Saved state at message {message_counter} (is_last={is_last})")
+                # print(f"[categorizer_q2] Worker {WORKER_INDEX} saved state at message {message_counter}")
 
             # 6. Check if client is complete (after state is saved)
             if is_last and client_end_messages[client_id] >= NUMBER_OF_YEAR_WORKERS:
+                print(f"🎯 [WORKER {WORKER_INDEX}] Client {client_id} COMPLETED! END messages: {client_end_messages[client_id]}/{NUMBER_OF_YEAR_WORKERS}")
                 completed_clients.add(client_id)
+                print(f"🎯 [WORKER {WORKER_INDEX}] Added client {client_id} to completed set. Total completed: {len(completed_clients)}")
                 send_client_q2_results(client_id, global_client_sales_stats[client_id], items)
-                print(f"✅ [WORKER {WORKER_INDEX}] Client {client_id} processing COMPLETED - sending results!")
+                print(f"✅ [WORKER {WORKER_INDEX}] Client {client_id} processing COMPLETED - sent results!")
 
         except Exception as e:
-            print(f"[categorizer_q2] ERROR processing sales message: {e}", file=sys.stderr)
+            print(f"❌ [WORKER {WORKER_INDEX}] ERROR processing sales message: {e}", file=sys.stderr)
+            print(f"❌ [WORKER {WORKER_INDEX}] FULL TRACEBACK:", file=sys.stderr)
+            traceback.print_exc()
+            print(f"❌ [WORKER {WORKER_INDEX}] Will NACK and requeue message (delivery_tag: {delivery_tag})", file=sys.stderr)
             # Don't ACK on error - message will be requeued
             channel.basic_nack(delivery_tag=delivery_tag, requeue=True)
 
@@ -636,8 +691,13 @@ def main():
             print(f"[categorizer_q2] Worker {WORKER_INDEX} collected {len(items)} menu items")
         
         # STEP 4: Start consuming new messages with manual ACK
+        print(f"🚀 [WORKER {WORKER_INDEX}] STARTING MESSAGE CONSUMPTION - processed_message_ids contains {len(processed_message_ids)} entries")
         listen_for_sales(items, topic_middleware)
-        print("[categorizer_q2] All clients processed successfully.")
+        print(f"🎯 [WORKER {WORKER_INDEX}] FINAL STATS - All clients processed successfully.")
+        print(f"🎯 [WORKER {WORKER_INDEX}] FINAL STATS - Total messages received: {total_messages_received}")
+        print(f"🎯 [WORKER {WORKER_INDEX}] FINAL STATS - END by client: {dict(end_messages_by_client)}")
+        print(f"🎯 [WORKER {WORKER_INDEX}] FINAL STATS - Messages by client: {dict(messages_by_client)}")
+        print(f"🎯 [WORKER {WORKER_INDEX}] FINAL STATS - Processed message IDs: {len(processed_message_ids)}")
         
     except Exception as e:
         print(f"[categorizer_q2] Error in main: {e}", file=sys.stderr)
