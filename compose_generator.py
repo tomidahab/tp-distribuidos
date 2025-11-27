@@ -291,8 +291,8 @@ def generate_compose_file():
             wln(2, "depends_on:")
             wln(3, "- rabbitmq_server")
             wln(3, "- gateway")
-            # wln(2, "volumes:")
-            # wln(3, f"- ./persistence/categorizer_q4_worker_{i + 1}:/app/persistence")
+            wln(2, "volumes:")
+            wln(3, f"- ./persistence/categorizer_q4_worker_{i + 1}:/app/persistence")
             f.write("\n")
             
         # ====================
