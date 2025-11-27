@@ -6,6 +6,7 @@ import time
 from datetime import datetime
 from common import config
 import json
+import base64
 
 from common.health_check_receiver import HealthCheckReceiver
 # Debug startup
@@ -69,30 +70,62 @@ def get_semester(month):
     return 1 if 1 <= month <= 6 else 2
 
 def listen_for_transactions():
-    client_semester_store_stats, client_end_messages, recovered_rows = recover_state_from_disk()
+    """
+    Listens for transactions and processes recovered messages from disk.
+    """
+    # Recover state from disk
+    client_semester_store_stats, client_end_messages, recovered_messages = recover_state_from_disk()
     processed_rows = 0
     completed_clients = set()
     processed_message_ids = set()
 
-    # Process recovered rows
-    for row in recovered_rows:
+    # Process recovered messages
+    for message in recovered_messages:
         try:
-            dic_fields_row = row_to_dict(row, CSV_TYPES_REVERSE['transactions'])
-            created_at = dic_fields_row['created_at']
-            datetime_obj = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S")
-            year = datetime_obj.year
-            month = datetime_obj.month
-            semester = get_semester(month)
-            store_id = str(dic_fields_row['store_id'])
-            payment_value = float(dic_fields_row.get('final_amount', 0.0))
-            client_id = dic_fields_row['client_id']
+            # Use the same logic as on_message_callback to process recovered messages
+            parsed_message = parse_message(message)
+            message_id = parsed_message.get('message_id')
+            if message_id in processed_message_ids:
+                continue  # Skip already processed messages
 
-            if payment_value > 0:
-                key = (year, semester, store_id)
-                client_semester_store_stats[client_id][key] += payment_value
-                processed_rows += 1
+            # Mark the message as processed
+            processed_message_ids.add(message_id)
+
+            # Process the message
+            type_of_message = parsed_message['csv_type']
+            client_id = parsed_message['client_id']
+            is_last = parsed_message['is_last']
+
+            # Handle END messages
+            if is_last:
+                client_end_messages[client_id] += 1
+                if client_end_messages[client_id] >= NUMBER_OF_HOUR_WORKERS:
+                    if client_id not in completed_clients:
+                        completed_clients.add(client_id)
+                        send_client_results(client_id, client_semester_store_stats[client_id])
+
+            # Skip if client already completed
+            if client_id in completed_clients:
+                continue
+
+            # Process rows in the message
+            for row in parsed_message['rows']:
+                dic_fields_row = row_to_dict(row, type_of_message)
+                created_at = dic_fields_row['created_at']
+                datetime_obj = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S")
+                year = datetime_obj.year
+                month = datetime_obj.month
+                semester = get_semester(month)
+                store_id = str(dic_fields_row['store_id'])
+                payment_value = float(dic_fields_row.get('final_amount', 0.0))
+
+                if payment_value > 0:
+                    key = (year, semester, store_id)
+                    client_semester_store_stats[client_id][key] += payment_value
+                    processed_rows += 1
+
         except Exception as e:
-            print(f"[categorizer_q3] ERROR processing recovered row: {e}", file=sys.stderr)
+            print(f"[categorizer_q3] ERROR processing recovered message: {e}", file=sys.stderr)
 
     # Get routing keys for this worker
     worker_routing_keys = SEMESTER_MAPPING.get(WORKER_INDEX, [])
@@ -182,8 +215,8 @@ def listen_for_transactions():
                     client_semester_store_stats[client_id][key] += payment_value
                     processed_rows += 1
 
-            # Append rows to disk
-            append_transaction_rows_to_disk(batch_rows)
+            # Append the entire message to disk
+            append_message_to_disk(message)
 
             # Save state every 100 rows
             if processed_rows >= 100:
@@ -255,8 +288,14 @@ def send_results_to_gateway(semester_store_stats):
         raise e
 
 def save_state_to_disk(client_semester_store_stats, client_end_messages):
+    """
+    Saves the client_semester_store_stats and client_end_messages to disk atomically.
+    Writes the JSON data as the first line of the file.
+    """
     try:
         os.makedirs(PERSISTENCE_DIR, exist_ok=True)
+
+        # Prepare the JSON data to save
         serializable_data = {
             "semester_store_stats": {
                 client_id: {
@@ -268,8 +307,13 @@ def save_state_to_disk(client_semester_store_stats, client_end_messages):
             "end_messages": dict(client_end_messages),
             "processed_message_ids": list(processed_message_ids)  # Convert set to list for JSON serialization
         }
+
+        # Write the JSON data to the auxiliary file
         with open(AUXILIARY_FILE, "w") as aux_file:
-            json.dump(serializable_data, aux_file)
+            json.dump(serializable_data, aux_file)  # Write JSON data
+            aux_file.write("\n")  # Add a newline to separate JSON from messages
+
+        # Atomically rename the auxiliary file to the backup file
         os.rename(AUXILIARY_FILE, BACKUP_FILE)
         print(f"[categorizer_q3] Worker {WORKER_INDEX} saved state to {BACKUP_FILE} atomically")
     except Exception as e:
@@ -287,17 +331,32 @@ def append_transaction_rows_to_disk(rows):
     except Exception as e:
         print(f"[categorizer_q3] ERROR appending transaction rows to disk: {e}", file=sys.stderr)
 
+def append_message_to_disk(message):
+    """
+    Appends a whole message to the backup file, encoded in base64.
+    """
+    try:
+        is_first_write = not os.path.exists(BACKUP_FILE)  # Check if the file is being created for the first time
+        with open(BACKUP_FILE, "a") as backup_file:
+            if is_first_write:
+                backup_file.write("{}\n")  # Write an empty JSON object as the first line
+            encoded_message = base64.b64encode(message).decode("ascii")
+            backup_file.write(encoded_message + "\n")  # Write the encoded message on a new line
+        print(f"[categorizer_q3] Worker {WORKER_INDEX} appended a message to {BACKUP_FILE}")
+    except Exception as e:
+        print(f"[categorizer_q3] ERROR appending message to disk: {e}", file=sys.stderr)
+
 def recover_state_from_disk():
     """
-    Recovers the client_semester_store_stats, client_end_messages, and transaction rows from disk.
+    Recovers the client_semester_store_stats, client_end_messages, and messages from disk.
     If the auxiliary file exists, discard it and use the main backup file.
-    Detects and deletes corrupted rows during recovery.
+    Detects and deletes corrupted messages during recovery.
     """
     client_semester_store_stats = defaultdict(lambda: defaultdict(float))
     client_end_messages = defaultdict(int)
     global processed_message_ids
     processed_message_ids = set()
-    valid_rows = []
+    recovered_messages = []
 
     # Check if the auxiliary file exists
     if os.path.exists(AUXILIARY_FILE):
@@ -306,42 +365,49 @@ def recover_state_from_disk():
 
     if not os.path.exists(BACKUP_FILE):
         print(f"[categorizer_q3] Worker {WORKER_INDEX} no backup file found, starting fresh")
-        return client_semester_store_stats, client_end_messages, valid_rows
+        return client_semester_store_stats, client_end_messages, recovered_messages
 
     try:
         with open(BACKUP_FILE, "r") as backup_file:
             lines = backup_file.readlines()
             if lines:
-                # Restore dictionaries from the first line (JSON)
-                json_data = lines[0]
-                data = json.loads(json_data)
-                # Restore semester store stats
-                client_semester_store_stats = defaultdict(
-                    lambda: defaultdict(float),
-                    {
-                        client_id: {
-                            tuple(key.split(",")): total_payment
-                            for key, total_payment in semester_store_stats.items()
+                # Parse the first line as JSON
+                try:
+                    json_data = lines[0].strip()
+                    data = json.loads(json_data)
+                    # Restore semester store stats
+                    client_semester_store_stats = defaultdict(
+                        lambda: defaultdict(float),
+                        {
+                            client_id: {
+                                tuple(key.split(",")): total_payment
+                                for key, total_payment in semester_store_stats.items()
+                            }
+                            for client_id, semester_store_stats in data["semester_store_stats"].items()
                         }
-                        for client_id, semester_store_stats in data["semester_store_stats"].items()
-                    }
-                )
-                # Restore end messages
-                client_end_messages = defaultdict(int, data["end_messages"])
-                processed_message_ids = set(data.get("processed_message_ids", []))
+                    )
+                    # Restore end messages
+                    client_end_messages = defaultdict(int, data["end_messages"])
+                    processed_message_ids = set(data.get("processed_message_ids", []))
+                    print(f"[categorizer_q3] Successfully recovered state from JSON in {BACKUP_FILE}")
+                except json.JSONDecodeError as e:
+                    print(f"[categorizer_q3] ERROR parsing JSON from backup file: {e}", file=sys.stderr)
+                    return client_semester_store_stats, client_end_messages, recovered_messages
+
+                # Decode and process remaining lines as messages
                 for line in lines[1:]:
                     line = line.strip()
                     if not line:
                         continue
                     try:
-                        dic_fields_row = row_to_dict(line, CSV_TYPES_REVERSE['transactions'])
-                        valid_rows.append(line)
-                    except Exception:
-                        print(f"[categorizer_q3] Corrupted row detected and skipped: {line}", file=sys.stderr)
+                        decoded_message = base64.b64decode(line).decode("utf-8")
+                        recovered_messages.append(decoded_message)
+                    except Exception as e:
+                        print(f"[categorizer_q3] Corrupted message detected and skipped: {line}. Error: {e}", file=sys.stderr)
     except Exception as e:
         print(f"[categorizer_q3] ERROR recovering state from {BACKUP_FILE}: {e}", file=sys.stderr)
 
-    return client_semester_store_stats, client_end_messages, valid_rows
+    return client_semester_store_stats, client_end_messages, recovered_messages
 
 def main():
     signal.signal(signal.SIGTERM, _sigterm_handler)
