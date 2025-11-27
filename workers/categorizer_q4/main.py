@@ -72,6 +72,7 @@ def listen_for_transactions():
                 client_end_messages[client_id] += 1
                 print(f"[categorizer_q4][recover] Worker {WORKER_INDEX} received END message {client_end_messages[client_id]}/{NUMBER_OF_YEAR_WORKERS} for client {client_id}")
                 if client_end_messages[client_id] >= NUMBER_OF_YEAR_WORKERS:
+                    print(f"[categorizer_q4][recover] cleaning completed for {client_id}")
                     # Clear tracking for completed client
                     del client_store_user_counter[client_id]
                     del client_end_messages[client_id]
@@ -107,15 +108,17 @@ def listen_for_transactions():
             # Skip if client already completed
             # NOTE: THIS SHOULD NOT HAPPEN?
             if client_id in completed_clients_for_debug:
-                print(f"[categorizer_q4][debug] Worker {WORKER_INDEX} ignoring message for already completed client {client_id}")
+                print(f"[categorizer_q4][debug] Worker {WORKER_INDEX} ignoring message for already completed client {client_id}", flush=True)
                 return
             
             # Skip message if duplicated
             if last_message_per_sender[sender_id] == message_id:
+                print(f"[categorizer_q4] A DUPLICATED MESSAGE WAS RECEIVED, IGNORING IT", flush=True)
+
                 # Send ack for duplicated message
                 if channel and delivery_tag:
                     channel.basic_ack(delivery_tag=delivery_tag)
-                    print(f"[categorizer_q4] Acknowledged message with delivery tag {delivery_tag}")
+                    print(f"[categorizer_q4] Acknowledged message with delivery tag {delivery_tag}", flush=True)
                 return
             
             last_message_per_sender[sender_id] = message_id
@@ -129,24 +132,25 @@ def listen_for_transactions():
 
             if is_last:
                 client_end_messages[client_id] += 1
-                print(f"[categorizer_q4] Worker {WORKER_INDEX} received END message {client_end_messages[client_id]}/{NUMBER_OF_YEAR_WORKERS} for client {client_id}")
+                print(f"[categorizer_q4] Worker {WORKER_INDEX} received END message {client_end_messages[client_id]}/{NUMBER_OF_YEAR_WORKERS} for client {client_id}", flush=True)
                 
                 if client_end_messages[client_id] >= NUMBER_OF_YEAR_WORKERS:
-                    print(f"[categorizer_q4] Client {client_id} received all END messages, processing results")
+                    print(f"[categorizer_q4] Client {client_id} received all END messages, processing results", flush=True)
                     completed_clients_for_debug.add(client_id)
                     
                     # Process and send results for this client
                     send_client_q4_results(client_id, client_store_user_counter[client_id])
                     
+                    print(f"[categorizer_q4] cleaning completed for {client_id}")
                     # Once the results are sent, clear tracking for completed client
                     del client_store_user_counter[client_id]
                     del client_end_messages[client_id]
 
-                    print(f"[categorizer_q4] Client {client_id} processing completed")
+                    print(f"[categorizer_q4] Client {client_id} processing completed", flush=True)
 
             # Write the message to disk
             append_message_to_disk(message)
-            print(f"[categorizer_q4] Message {message_id} stored")
+            print(f"[categorizer_q4] Message {message_id} stored", flush=True)
 
             messages_counter += 1
             # Every 100 rows, write the full dictionary to the backup file
@@ -157,7 +161,7 @@ def listen_for_transactions():
             # Send acknowledgment after processing the batch
             if channel and delivery_tag:
                 channel.basic_ack(delivery_tag=delivery_tag)
-                print(f"[categorizer_q4] Acknowledged message with delivery tag {delivery_tag}")
+                print(f"[categorizer_q4] Acknowledged message with delivery tag {delivery_tag}", flush=True)
         except Exception as e:
             print(f"[categorizer_q4] Error processing message: {e}", file=sys.stderr)
 
@@ -182,7 +186,11 @@ def get_top_users_per_store(store_user_counter, top_n=3):
     # Returns {store_id: [(user_id, purchase_count), ...]}
     top_users = {}
     for store_id, user_counter in store_user_counter.items():
-        top_users[store_id] = get_top_users(user_counter)
+        try:
+            top_users[store_id] = get_top_users(user_counter)
+        except Exception as e:
+            print(f"[categorizer_q4] ERROR TAKE: {e}", file=sys.stderr)
+            print(f"[categorizer_q4] ERROR TAKE DETAILS: {store_id}, {user_counter}")
     return top_users
 
 def send_client_q4_results(client_id, store_user_counter):
@@ -198,13 +206,18 @@ def send_client_q4_results(client_id, store_user_counter):
             queue_name='',
             routing_keys=None
         )
+        print(f"[categorizer_q4] STEP 1 {client_id}")
         # Get top users per store for this client
         top_users = get_top_users_per_store(store_user_counter, top_n=3)
+
+        print(f"[categorizer_q4] STEP 2 {client_id}")
         # Prepare all rows for all stores in one message
         rows = []
         for store_id, users in top_users.items():
             for user_id, count in users:
                 rows.append(f"{store_id},{user_id},{count}")
+        print(f"[categorizer_q4] STEP 3 {client_id}")
+        
         # Send a single message with all top users for all stores
         message, _ = build_message(client_id, 4, 1, rows)
         birthday_dict_exchange.send(message, routing_key=f"client.{worker_index}")
@@ -286,10 +299,13 @@ def recover_state():
                 client_store_user_counter = defaultdict(
                     lambda: defaultdict(Counter),
                     {
-                        client_id: defaultdict(Counter, {
-                            store_id: Counter(user_counter)
-                            for store_id, user_counter in store_data.items()
-                        })
+                        client_id: defaultdict(
+                            Counter,
+                            {
+                                store_id: Counter({int(user_id): count for user_id, count in user_counter.items()})
+                                for store_id, user_counter in store_data.items()
+                            }
+                        )
                         for client_id, store_data in data["client_store_user_counter"].items()
                     }
                 )
