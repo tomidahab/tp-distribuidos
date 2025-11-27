@@ -269,8 +269,7 @@ def save_state_to_disk(client_semester_store_stats, client_end_messages):
             "processed_message_ids": list(processed_message_ids)  # Convert set to list for JSON serialization
         }
         with open(AUXILIARY_FILE, "w") as aux_file:
-            json.dump(serializable_data, aux_file, indent=4)  # Write JSON data
-            aux_file.write("\n")  # Add a newline to separate JSON from rows
+            json.dump(serializable_data, aux_file)
         os.rename(AUXILIARY_FILE, BACKUP_FILE)
         print(f"[categorizer_q3] Worker {WORKER_INDEX} saved state to {BACKUP_FILE} atomically")
     except Exception as e:
@@ -312,13 +311,9 @@ def recover_state_from_disk():
     try:
         with open(BACKUP_FILE, "r") as backup_file:
             lines = backup_file.readlines()
-            if not lines:
-                print(f"[categorizer_q3] Backup file is empty. Starting fresh.")
-                return client_semester_store_stats, client_end_messages, valid_rows
-
-            # Parse the first line as JSON
-            try:
-                json_data = lines[0].strip()
+            if lines:
+                # Restore dictionaries from the first line (JSON)
+                json_data = lines[0]
                 data = json.loads(json_data)
                 # Restore semester store stats
                 client_semester_store_stats = defaultdict(
@@ -333,24 +328,16 @@ def recover_state_from_disk():
                 )
                 # Restore end messages
                 client_end_messages = defaultdict(int, data["end_messages"])
-                # Restore processed message IDs
                 processed_message_ids = set(data.get("processed_message_ids", []))
-                print(f"[categorizer_q3] Successfully recovered state from JSON in {BACKUP_FILE}")
-            except json.JSONDecodeError as e:
-                print(f"[categorizer_q3] ERROR parsing JSON from backup file: {e}", file=sys.stderr)
-                return client_semester_store_stats, client_end_messages, valid_rows
-
-            # Process remaining lines as transaction rows
-            for line in lines[1:]:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    dic_fields_row = row_to_dict(line, CSV_TYPES_REVERSE['transactions'])
-                    valid_rows.append(line)
-                except Exception:
-                    print(f"[categorizer_q3] Corrupted row detected and skipped: {line}", file=sys.stderr)
-
+                for line in lines[1:]:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        dic_fields_row = row_to_dict(line, CSV_TYPES_REVERSE['transactions'])
+                        valid_rows.append(line)
+                    except Exception:
+                        print(f"[categorizer_q3] Corrupted row detected and skipped: {line}", file=sys.stderr)
     except Exception as e:
         print(f"[categorizer_q3] ERROR recovering state from {BACKUP_FILE}: {e}", file=sys.stderr)
 
