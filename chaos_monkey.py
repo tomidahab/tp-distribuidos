@@ -2,6 +2,7 @@
 """
 Chaos Monkey for tp-distribuidos
 Randomly kills worker containers to test fault tolerance.
+Can kill multiple containers simultaneously for more chaotic scenarios.
 Excludes: client, gateway, and rabbitmq containers.
 """
 
@@ -14,9 +15,10 @@ import argparse
 from typing import List, Set
 
 class ChaosMonkey:
-    def __init__(self, min_interval: int = 10, max_interval: int = 60, dry_run: bool = False):
+    def __init__(self, min_interval: int = 10, max_interval: int = 60, kill_count: int = 1, dry_run: bool = False):
         self.min_interval = min_interval
         self.max_interval = max_interval
+        self.kill_count_per_event = kill_count
         self.dry_run = dry_run
         self.running = True
         
@@ -30,10 +32,10 @@ class ChaosMonkey:
             'filter_by_amount_worker_',
             'filter_by_hour_worker_',
             'filter_by_year_worker_',
-            'categorizer_q2_worker_',
-            'categorizer_q3_worker_',
-            'categorizer_q4_worker_',
-            'birthday_dictionary_worker_'
+            'categorizer_q2_worker_'
+            # 'categorizer_q3_worker_',
+            # 'categorizer_q4_worker_',
+            # 'birthday_dictionary_worker_'
         }
         
         # Track kills for statistics
@@ -42,6 +44,7 @@ class ChaosMonkey:
         
         print(f"🐒 Chaos Monkey initialized")
         print(f"   Kill interval: {min_interval}-{max_interval} seconds")
+        print(f"   Containers per event: {kill_count}")
         print(f"   Dry run mode: {'ON' if dry_run else 'OFF'}")
         print(f"   Protected: {', '.join(self.protected_patterns)}")
         print()
@@ -82,37 +85,49 @@ class ChaosMonkey:
         killable = [c for c in all_containers if self.is_killable_container(c)]
         return killable
 
-    def kill_random_container(self) -> bool:
-        """Kill a random killable container. Returns True if successful."""
+    def kill_random_containers(self) -> int:
+        """Kill random killable containers. Returns number of containers actually killed."""
         killable_containers = self.get_killable_containers()
         
         if not killable_containers:
             print("⚠️  No killable containers found!")
-            return False
+            return 0
         
-        # Select random victim
-        victim = random.choice(killable_containers)
+        # Determine how many to kill (up to available containers)
+        targets_to_kill = min(self.kill_count_per_event, len(killable_containers))
         
-        # Extract worker type for statistics
-        worker_type = self._extract_worker_type(victim)
+        # Select random victims (without replacement)
+        victims = random.sample(killable_containers, targets_to_kill)
+        
+        successful_kills = 0
         
         if self.dry_run:
-            print(f"🎭 DRY RUN: Would kill {victim} ({worker_type})")
-            return True
+            print(f"🎭 DRY RUN: Would kill {targets_to_kill} containers:")
+            for victim in victims:
+                worker_type = self._extract_worker_type(victim)
+                print(f"   💀 {victim} ({worker_type})")
+            return targets_to_kill
         
-        try:
-            # Kill the container
-            subprocess.run(['docker', 'kill', victim], check=True, capture_output=True)
+        print(f"💥 Chaos event: Killing {targets_to_kill} containers...")
+        
+        for victim in victims:
+            worker_type = self._extract_worker_type(victim)
             
-            self.kill_count += 1
-            self.kills_by_type[worker_type] = self.kills_by_type.get(worker_type, 0) + 1
-            
-            print(f"💀 Killed {victim} ({worker_type}) - Total kills: {self.kill_count}")
-            return True
-            
-        except subprocess.CalledProcessError as e:
-            print(f"❌ Failed to kill {victim}: {e}")
-            return False
+            try:
+                # Kill the container
+                subprocess.run(['docker', 'kill', victim], check=True, capture_output=True)
+                
+                self.kill_count += 1
+                self.kills_by_type[worker_type] = self.kills_by_type.get(worker_type, 0) + 1
+                successful_kills += 1
+                
+                print(f"   💀 Killed {victim} ({worker_type})")
+                
+            except subprocess.CalledProcessError as e:
+                print(f"   ❌ Failed to kill {victim}: {e}")
+        
+        print(f"✅ Chaos event complete: {successful_kills}/{targets_to_kill} kills successful (Total: {self.kill_count})")
+        return successful_kills
 
     def _extract_worker_type(self, container_name: str) -> str:
         """Extract worker type from container name for statistics"""
@@ -161,7 +176,7 @@ class ChaosMonkey:
                     break
                 
                 # Execute chaos!
-                self.kill_random_container()
+                self.kill_random_containers()
                 
             except KeyboardInterrupt:
                 self.signal_handler(None, None)
@@ -176,6 +191,8 @@ def main():
                        help='Minimum seconds between kills (default: 10)')
     parser.add_argument('--max-interval', type=int, default=60,
                        help='Maximum seconds between kills (default: 60)')
+    parser.add_argument('--kill-count', type=int, default=1,
+                       help='Number of containers to kill per chaos event (default: 1)')
     parser.add_argument('--dry-run', action='store_true',
                        help='Show what would be killed without actually killing')
     parser.add_argument('--status', action='store_true',
@@ -190,10 +207,14 @@ def main():
     if args.max_interval < args.min_interval:
         print("❌ max-interval must be >= min-interval")
         sys.exit(1)
+    if args.kill_count < 1:
+        print("❌ kill-count must be at least 1")
+        sys.exit(1)
     
     chaos_monkey = ChaosMonkey(
         min_interval=args.min_interval,
         max_interval=args.max_interval,
+        kill_count=args.kill_count,
         dry_run=args.dry_run
     )
     

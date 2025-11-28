@@ -1,6 +1,7 @@
 import os
 import signal
 import sys
+import json
 from collections import defaultdict
 from time import sleep
 from common.health_check_receiver import HealthCheckReceiver
@@ -15,12 +16,12 @@ MIN_AMOUNT = float(os.environ.get('MIN_AMOUNT', 15.0))
 RESULT_QUEUE = os.environ.get('RESULT_QUEUE', 'query1_result_receiver_queue')
 NUMBER_OF_HOUR_WORKERS = int(os.environ.get('NUMBER_OF_HOUR_WORKERS', '3'))
 
-# File to persist last processed message_id per sender
+# File to persist processed message_ids per sender
 PERSISTENCE_DIR = "/app/persistence"
 
 def get_persistence_file(sender):
     """Get the persistence file path for a specific sender"""
-    return f"{PERSISTENCE_DIR}/worker_{WORKER_INDEX}_last_message_sender_{sender}.txt"
+    return f"{PERSISTENCE_DIR}/worker_{WORKER_INDEX}_processed_messages_sender_{sender}.json"
 
 # Global variables for statistics
 rows_received = 0
@@ -50,8 +51,8 @@ def _sigterm_handler(signum, _):
     _close_queue(queue_result)
     _close_queue(topic_middleware)
 
-def load_last_processed_message_id(sender):
-    """Load the last processed message_id from disk for a specific sender"""
+def load_processed_message_ids(sender):
+    """Load the set of processed message_ids from disk for a specific sender"""
     try:
         # Create persistence directory if it doesn't exist
         os.makedirs(PERSISTENCE_DIR, exist_ok=True)
@@ -59,28 +60,26 @@ def load_last_processed_message_id(sender):
         persistence_file = get_persistence_file(sender)
         if os.path.exists(persistence_file):
             with open(persistence_file, 'r') as f:
-                content = f.read().strip()
-                if content:
-                    # print(f"[filter_by_amount] Worker {WORKER_INDEX} loaded last processed message_id from disk for sender {sender}: {content}", flush=True)
-                    return content
+                data = json.load(f)
+                return set(data.get('processed_message_ids', []))
+        else:
+            return set()
     except Exception as e:
-        print(f"[filter_by_amount] Worker {WORKER_INDEX} ERROR loading last message_id from disk for sender {sender}: {e}", flush=True)
-    
-    # print(f"[filter_by_amount] Worker {WORKER_INDEX} no previous message_id found on disk for sender {sender}", flush=True)
-    return None
+        print(f"[filter_by_amount] Worker {WORKER_INDEX} ERROR loading persistence for sender {sender}: {e}", flush=True)
+        return set()
 
-def save_last_processed_message_id(sender, message_id):
-    """Save the last processed message_id to disk for a specific sender"""
+def save_processed_message_ids(sender, processed_ids):
+    """Save the set of processed message_ids to disk for a specific sender"""
     try:
         os.makedirs(PERSISTENCE_DIR, exist_ok=True)
         
         persistence_file = get_persistence_file(sender)
         with open(persistence_file, 'w') as f:
-            f.write(message_id)
+            json.dump({'processed_message_ids': list(processed_ids)}, f)
             f.flush()
-            os.fsync(f.fileno()) 
+            os.fsync(f.fileno())
         
-        # print(f"[filter_by_amount] Worker {WORKER_INDEX} saved message_id to disk for sender {sender}: {message_id}", flush=True)
+        print(f"[filter_by_amount] Worker {WORKER_INDEX} saved {len(processed_ids)} processed message_ids to disk for sender {sender}", flush=True)
     except Exception as e:
         print(f"[filter_by_amount] Worker {WORKER_INDEX} ERROR saving message_id to disk for sender {sender}: {e}", flush=True)
 
@@ -122,11 +121,6 @@ def send_ack(sender_id, message_id):
 def on_message_callback(message: bytes, topic_middleware, should_stop, delivery_tag=None, channel=None):
     global rows_received, rows_sent, client_end_messages, completed_clients, client_stats
     
-    if should_stop.is_set():  # Don't process if we're stopping
-        if delivery_tag and channel:
-            channel.basic_nack(delivery_tag=delivery_tag, requeue=True)
-        return
-        
     try:
         # print(f"[filter_by_amount] Worker {WORKER_INDEX} received a message!", flush=True)
         parsed_message = parse_message(message)
@@ -139,19 +133,32 @@ def on_message_callback(message: bytes, topic_middleware, should_stop, delivery_
         sender = parsed_message.get('sender', 'unknown')
         
         # Initialize disk persistence tracking per sender if needed
-        if not hasattr(on_message_callback, '_disk_last_message_id_by_sender'):
-            on_message_callback._disk_last_message_id_by_sender = {}
+        if not hasattr(on_message_callback, '_processed_message_ids_by_sender'):
+            on_message_callback._processed_message_ids_by_sender = {}
         
-        # Load last processed message_id from disk for this sender if not loaded yet
-        if sender not in on_message_callback._disk_last_message_id_by_sender:
-            disk_last_message_id = load_last_processed_message_id(sender)
-            on_message_callback._disk_last_message_id_by_sender[sender] = disk_last_message_id
-            print(f"[filter_by_amount] Worker {WORKER_INDEX} initialized disk persistence for sender {sender}", flush=True)
+        # Load processed message_ids from disk for this sender if not loaded yet
+        if sender not in on_message_callback._processed_message_ids_by_sender:
+            processed_ids = load_processed_message_ids(sender)
+            on_message_callback._processed_message_ids_by_sender[sender] = processed_ids
+            print(f"[filter_by_amount] Worker {WORKER_INDEX} loaded {len(processed_ids)} processed message_ids for sender {sender}", flush=True)
         
         # Check if this is a duplicate message from this sender (message we processed before restart)
-        if message_id and message_id == on_message_callback._disk_last_message_id_by_sender[sender]:
-            print(f"[filter_by_amount] Worker {WORKER_INDEX} DUPLICATE message detected from disk persistence for sender {sender}, message_id {message_id} - skipping (container restart recovery)", flush=True)
+        if message_id and message_id in on_message_callback._processed_message_ids_by_sender[sender]:
+            print(f"[filter_by_amount] Worker {WORKER_INDEX} DUPLICATE message detected for sender {sender}, message_id {message_id} - skipping", flush=True)
             # ACK the duplicate message to avoid reprocessing
+            if delivery_tag and channel:
+                channel.basic_ack(delivery_tag=delivery_tag)
+            return
+        
+        # Check if we're stopping AFTER parsing and duplicate detection  
+        if should_stop.is_set():  # Don't process if we're stopping
+            print(f"[filter_by_amount] Worker {WORKER_INDEX} should_stop detected, saving message_id and ACKing to prevent reprocessing", flush=True)
+            # Save message_id to prevent reprocessing after restart
+            if message_id:
+                on_message_callback._processed_message_ids_by_sender[sender].add(message_id)
+                save_processed_message_ids(sender, on_message_callback._processed_message_ids_by_sender[sender])
+                print(f"[filter_by_amount] Worker {WORKER_INDEX} saved message_id during shutdown for sender {sender}: {message_id}", flush=True)
+            # ACK to avoid requeue since we've marked it as processed
             if delivery_tag and channel:
                 channel.basic_ack(delivery_tag=delivery_tag)
             return
@@ -224,8 +231,10 @@ def on_message_callback(message: bytes, topic_middleware, should_stop, delivery_
         
         # CRITICAL: Save message_id to disk AFTER successful message sending to prevent message loss
         if message_id and sender:
-            save_last_processed_message_id(sender, message_id)
-            print(f"[filter_by_amount] Worker {WORKER_INDEX} saved message_id to disk for sender {sender}: {message_id}", flush=True)
+            # Add message_id to processed set and save to disk
+            on_message_callback._processed_message_ids_by_sender[sender].add(message_id)
+            save_processed_message_ids(sender, on_message_callback._processed_message_ids_by_sender[sender])
+            print(f"[filter_by_amount] Worker {WORKER_INDEX} added message_id to processed set for sender {sender}: {message_id}", flush=True)
         
         # Manual ACK after persistence
         if delivery_tag and channel:
