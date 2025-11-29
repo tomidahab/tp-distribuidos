@@ -414,6 +414,8 @@ services:
     depends_on:
       - rabbitmq_server
       - gateway
+    volumes:
+      - ./persistence/birthday_dictionary_worker_0:/app/persistence
 
   birthday_dictionary_worker_1:
     build:
@@ -435,6 +437,8 @@ services:
     depends_on:
       - rabbitmq_server
       - gateway
+    volumes:
+      - ./persistence/birthday_dictionary_worker_1:/app/persistence
 
   birthday_dictionary_worker_2:
     build:
@@ -456,6 +460,8 @@ services:
     depends_on:
       - rabbitmq_server
       - gateway
+    volumes:
+      - ./persistence/birthday_dictionary_worker_2:/app/persistence
 
   categorizer_q4_worker_1:
     build:
