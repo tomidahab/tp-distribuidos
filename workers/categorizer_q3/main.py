@@ -74,7 +74,7 @@ def listen_for_transactions():
     Listens for transactions and processes recovered messages from disk.
     """
     # Recover state from disk
-    client_semester_store_stats, client_end_messages, recovered_messages = recover_state_from_disk()
+    client_semester_store_stats, client_end_messages, last_message_per_sender, recovered_messages = recover_state_from_disk()
     processed_rows = 0
     completed_clients = set()
     processed_message_ids = set()
@@ -165,23 +165,24 @@ def listen_for_transactions():
     print(f"[categorizer_q3] Worker {WORKER_INDEX} listening for transactions on exchange: {RECEIVER_EXCHANGE} with routing keys: {worker_routing_keys}")
 
     def on_message_callback(message: bytes, delivery_tag=None, channel=None):
-        nonlocal processed_rows, completed_clients, processed_message_ids
+        nonlocal processed_rows, completed_clients, last_message_per_sender
         try:
             parsed_message = parse_message(message)
+            sender_id = parsed_message['sender']
             message_id = parsed_message.get('message_id')  # Assume each message has a unique 'message_id'
             type_of_message = parsed_message['csv_type']
             client_id = parsed_message['client_id']
             is_last = parsed_message['is_last']
 
             # Check if the message has already been processed
-            if message_id in processed_message_ids:
+            if last_message_per_sender[sender_id] == message_id:
                 print(f"[categorizer_q3] Worker {WORKER_INDEX} ignoring repeated message with ID: {message_id}")
                 if channel and delivery_tag:
                     channel.basic_ack(delivery_tag=delivery_tag)  # Acknowledge the message
                 return
 
             # Mark the message as processed
-            processed_message_ids.add(message_id)
+            last_message_per_sender[sender_id] = message_id
 
             # Handle END messages
             if is_last:
@@ -221,7 +222,7 @@ def listen_for_transactions():
 
             # Save state every 100 rows
             if processed_rows >= 100:
-                save_state_to_disk(client_semester_store_stats, client_end_messages)
+                save_state_to_disk(client_semester_store_stats, client_end_messages, last_message_per_sender)
                 processed_rows = 0
 
             # Send acknowledgment after successful processing
@@ -288,9 +289,9 @@ def send_results_to_gateway(semester_store_stats):
         print(f"[categorizer_q3] ERROR in send_results_to_gateway: {e}")
         raise e
 
-def save_state_to_disk(client_semester_store_stats, client_end_messages):
+def save_state_to_disk(client_semester_store_stats, client_end_messages, last_message_per_sender):
     """
-    Saves the client_semester_store_stats and client_end_messages to disk atomically.
+    Saves the client_semester_store_stats, client_end_messages, and last_message_per_sender to disk atomically.
     Writes the JSON data as the first line of the file.
     """
     try:
@@ -306,7 +307,7 @@ def save_state_to_disk(client_semester_store_stats, client_end_messages):
                 for client_id, semester_store_stats in client_semester_store_stats.items()
             },
             "end_messages": dict(client_end_messages),
-            "processed_message_ids": list(processed_message_ids)  # Convert set to list for JSON serialization
+            "last_message_per_sender": dict(last_message_per_sender),  # Save last processed message IDs
         }
 
         # Write the JSON data to the auxiliary file
@@ -349,14 +350,13 @@ def append_message_to_disk(message):
 
 def recover_state_from_disk():
     """
-    Recovers the client_semester_store_stats, client_end_messages, and messages from disk.
+    Recovers the client_semester_store_stats, client_end_messages, last_message_per_sender, and messages from disk.
     If the auxiliary file exists, discard it and use the main backup file.
     Detects and deletes corrupted messages during recovery.
     """
     client_semester_store_stats = defaultdict(lambda: defaultdict(float))
     client_end_messages = defaultdict(int)
-    global processed_message_ids
-    processed_message_ids = set()
+    last_message_per_sender = defaultdict(str)
     recovered_messages = []
 
     # Check if the auxiliary file exists
@@ -366,7 +366,7 @@ def recover_state_from_disk():
 
     if not os.path.exists(BACKUP_FILE):
         print(f"[categorizer_q3] Worker {WORKER_INDEX} no backup file found, starting fresh")
-        return client_semester_store_stats, client_end_messages, recovered_messages
+        return client_semester_store_stats, client_end_messages, last_message_per_sender, recovered_messages
 
     try:
         with open(BACKUP_FILE, "r") as backup_file:
@@ -389,11 +389,12 @@ def recover_state_from_disk():
                     )
                     # Restore end messages
                     client_end_messages = defaultdict(int, data["end_messages"])
-                    processed_message_ids = set(data.get("processed_message_ids", []))
+                    # Restore last message IDs
+                    last_message_per_sender = defaultdict(str, data["last_message_per_sender"])
                     print(f"[categorizer_q3] Successfully recovered state from JSON in {BACKUP_FILE}")
                 except json.JSONDecodeError as e:
                     print(f"[categorizer_q3] ERROR parsing JSON from backup file: {e}", file=sys.stderr)
-                    return client_semester_store_stats, client_end_messages, recovered_messages
+                    return client_semester_store_stats, client_end_messages, last_message_per_sender, recovered_messages
 
                 # Decode and process remaining lines as messages
                 for line in lines[1:]:
@@ -408,7 +409,7 @@ def recover_state_from_disk():
     except Exception as e:
         print(f"[categorizer_q3] ERROR recovering state from {BACKUP_FILE}: {e}", file=sys.stderr)
 
-    return client_semester_store_stats, client_end_messages, recovered_messages
+    return client_semester_store_stats, client_end_messages, last_message_per_sender, recovered_messages
 
 def main():
     signal.signal(signal.SIGTERM, _sigterm_handler)
