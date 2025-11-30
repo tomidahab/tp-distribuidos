@@ -113,9 +113,9 @@ def listen_for_transactions():
                 dic_fields_row = row_to_dict(row, type_of_message)
                 created_at = dic_fields_row['created_at']
                 datetime_obj = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S")
-                year = datetime_obj.year
+                year = str(datetime_obj.year)
                 month = datetime_obj.month
-                semester = get_semester(month)
+                semester = str(get_semester(month))
                 store_id = str(dic_fields_row['store_id'])
                 payment_value = float(dic_fields_row.get('final_amount', 0.0))
 
@@ -204,9 +204,9 @@ def listen_for_transactions():
                 dic_fields_row = row_to_dict(row, type_of_message)
                 created_at = dic_fields_row['created_at']
                 datetime_obj = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S")
-                year = datetime_obj.year
+                year = str(datetime_obj.year)
                 month = datetime_obj.month
-                semester = get_semester(month)
+                semester = str(get_semester(month))
                 store_id = str(dic_fields_row['store_id'])
                 payment_value = float(dic_fields_row.get('final_amount', 0.0))
 
@@ -214,6 +214,7 @@ def listen_for_transactions():
                     key = (year, semester, store_id)
                     client_semester_store_stats[client_id][key] += payment_value
                     processed_rows += 1
+
 
             # Append the entire message to disk
             append_message_to_disk(message)
