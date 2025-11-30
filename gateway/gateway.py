@@ -48,7 +48,7 @@ class Gateway:
         self.results_lock = threading.RLock()
         
         # Track duplicate messages by sender to prevent duplicate results (in-memory only)
-        self.processed_messages_by_sender = {}  # {sender: set(message_ids)}
+        self.last_message_id_by_sender = {}  # {sender: last_message_id}
         self.duplicates_lock = threading.RLock()
 
     def _sigterm_handler(self, signum, _):
@@ -108,18 +108,18 @@ class Gateway:
             message_id = parsed_message.get('message_id', '')
             sender = parsed_message.get('sender', 'unknown')
             
-            # Check for duplicate messages from the same sender (in-memory only since gateway doesn't restart)
+            # Check for duplicate messages from the same sender (simple last message_id comparison)
             with self.duplicates_lock:
-                if sender not in self.processed_messages_by_sender:
-                    self.processed_messages_by_sender[sender] = set()
+                last_msg_id = self.last_message_id_by_sender.get(sender)
                 
-                if message_id in self.processed_messages_by_sender[sender]:
-                    logging.info(f"[{result_queue}] DUPLICATE message detected from sender {sender}, message_id {message_id} - skipping")
+                if message_id and message_id == last_msg_id:
+                    logging.info(f"[{result_queue}] DUPLICATE message detected from sender {sender}, message_id {message_id} (same as last) - skipping")
                     return
                 
-                # Add message_id to processed set for this sender
+                # Update last message_id for this sender
                 if message_id:
-                    self.processed_messages_by_sender[sender].add(message_id)
+                    self.last_message_id_by_sender[sender] = message_id
+                    logging.debug(f"[{result_queue}] Updated last message_id for sender {sender}: {message_id}")
 
             with self.clients_lock:
                 self.clients[client_id].handle_message(self.queue_to_query(result_queue), parsed_message)

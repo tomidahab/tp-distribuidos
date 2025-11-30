@@ -142,6 +142,12 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
                 channel.basic_ack(delivery_tag=delivery_tag)
             return
 
+        # CRITICAL: Save message_id IMMEDIATELY to prevent reprocessing if worker dies during processing
+        if message_id and sender_id:
+            on_message_callback_transactions._processed_message_ids_by_sender[sender_id].add(message_id)
+            save_processed_message_ids(sender_id, on_message_callback_transactions._processed_message_ids_by_sender[sender_id])
+            print(f"[filter_by_year] Worker {WORKER_INDEX} IMMEDIATELY saved message_id for sender {sender_id}: {message_id}", flush=True)
+
         # Process message - no in-memory duplicate check by client (removed to avoid conflicts)
         if message_id:
             print(f"[filter_by_year] Worker {WORKER_INDEX} processing message_id {message_id} for client {client_id} from sender {sender_id}", flush=True)
@@ -234,13 +240,6 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
             channel.basic_nack(delivery_tag=delivery_tag, requeue=True)
         return
 
-    # CRITICAL: Save message_id to disk AFTER successful message sending to prevent message loss
-    if message_id and sender_id:
-        # Add message_id to processed set and save to disk
-        on_message_callback_transactions._processed_message_ids_by_sender[sender_id].add(message_id)
-        save_processed_message_ids(sender_id, on_message_callback_transactions._processed_message_ids_by_sender[sender_id])
-        print(f"[filter_by_year] Worker {WORKER_INDEX} added message_id to processed set for sender {sender_id}: {message_id}", flush=True)
-    
     # Manual ACK: Only acknowledge after successful processing and persistence
     if delivery_tag and channel:
         channel.basic_ack(delivery_tag=delivery_tag)
@@ -275,6 +274,12 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
             if delivery_tag and channel:
                 channel.basic_ack(delivery_tag=delivery_tag)
             return
+
+        # CRITICAL: Save message_id IMMEDIATELY to prevent reprocessing if worker dies during processing
+        if message_id and sender_id:
+            on_message_callback_t_items._processed_message_ids_by_sender[sender_id].add(message_id)
+            save_processed_message_ids(sender_id, on_message_callback_t_items._processed_message_ids_by_sender[sender_id])
+            print(f"[filter_by_year] Worker {WORKER_INDEX} IMMEDIATELY saved t_items message_id for sender {sender_id}: {message_id}", flush=True)
 
         # Process message - no in-memory duplicate check by client (removed to avoid conflicts)
         if message_id:
@@ -325,13 +330,6 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
             channel.basic_nack(delivery_tag=delivery_tag, requeue=True)
         return
 
-    # CRITICAL: Save message_id to disk AFTER successful message sending to prevent message loss
-    if message_id and sender_id:
-        # Add message_id to processed set and save to disk
-        on_message_callback_t_items._processed_message_ids_by_sender[sender_id].add(message_id)
-        save_processed_message_ids(sender_id, on_message_callback_t_items._processed_message_ids_by_sender[sender_id])
-        print(f"[filter_by_year] Worker {WORKER_INDEX} added message_id to processed set for sender {sender_id}: {message_id}", flush=True)
-    
     # Manual ACK
     if delivery_tag and channel:
         channel.basic_ack(delivery_tag=delivery_tag)
