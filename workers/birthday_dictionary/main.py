@@ -25,15 +25,8 @@ PERSISTENCE_DIR = "/app/persistence"
 BACKUP_FILE_TOP_USERS = f"{PERSISTENCE_DIR}/birthday_dictionary_worker_{WORKER_INDEX}_backup.txt"
 AUXILIARY_FILE_TOP_USERS = f"{PERSISTENCE_DIR}/birthday_dictionary_worker_{WORKER_INDEX}_backup.tmp"
 
-# BACKUP_FILE_USERS_DATA = f"{PERSISTENCE_DIR}/birthday_dictionary_worker_{WORKER_INDEX}_backup.txt"
-# AUXILIARY_FILE_USERS_DATA = f"{PERSISTENCE_DIR}/birthday_dictionary_worker_{WORKER_INDEX}_backup.tmp"
 BACKUP_FILE_USERS_DATA = f"{PERSISTENCE_DIR}/birthday_dictionary_worker_{WORKER_INDEX}_backup_i.txt"
 AUXILIARY_FILE_USERS_DATA = f"{PERSISTENCE_DIR}/birthday_dictionary_worker_{WORKER_INDEX}_backup_i.tmp"
-
-def get_backup_file_users_data(client_id):
-    return BACKUP_FILE_TOP_USERS.replace("i", str(client_id))
-def get_aux_file_users_data(client_id):
-    return AUXILIARY_FILE_USERS_DATA.replace("i", str(client_id))
 
 receiver_queue = None
 gateway_request_queue = None
@@ -112,7 +105,6 @@ class BirthClientHandler(threading.Thread):
         send_enriched_message_to_gateway(enriched_message)
     
         # Instead of saving, delete
-        # os.remove(get_backup_file_users_data(self.client_id))
         
         with client_in_process_cond:
             del passed_top_users[self.client_id]
@@ -144,8 +136,6 @@ def listen_for_top_users(messages_by_client, message_count_by_client, last_messa
         routing_keys=[f"client.{WORKER_INDEX}"]
     )
     print(f"[birthday_dictionary] Listening for top users on queue: {RECEIVER_QUEUE}")
-
-    # TODO: Start ready clients threads from recovered state (might be necessary to do out of this scope)
 
     def on_message_callback(message: bytes, delivery_tag=None, channel=None):
 
@@ -316,14 +306,6 @@ def save_users_data_state_to_disk(passed_top_users, birthdays_per_client, g_last
         os.makedirs(PERSISTENCE_DIR, exist_ok=True)
 
         serializable_data = {
-            # "client_store_user_counter": {
-            #     client_id: {
-            #         store_id: dict(user_counter)
-            #         for store_id, user_counter in store_users_data.items()
-            #     }
-            #     for client_id, store_users_data in client_store_user_counter.items()
-            # },
-            # "end_messages": dict(client_end_messages),
             "passed_top_users": dict(passed_top_users),
             "birthdays_per_client": dict(birthdays_per_client),
             "g_last_message_id": g_last_message_id
@@ -337,44 +319,11 @@ def save_users_data_state_to_disk(passed_top_users, birthdays_per_client, g_last
     except Exception as e:
         print(f"[birthday_dictionary] ERROR saving state(user_data) to disk: {e}", file=sys.stderr)
 
-# def save_user_data_state_to_disk(client_id, client_birthdays, last_message_id):
-#     try:
-#         os.makedirs(PERSISTENCE_DIR, exist_ok=True)
-
-#         serializable_data = {
-#             # "client_store_user_counter": {
-#             #     client_id: {
-#             #         store_id: dict(user_counter)
-#             #         for store_id, user_counter in store_users_data.items()
-#             #     }
-#             #     for client_id, store_users_data in client_store_user_counter.items()
-#             # },
-#             # "end_messages": dict(client_end_messages),
-#             "client_birthdays": dict(client_birthdays),
-#             "last_message_id": last_message_id
-#         }
-        
-#         with open(get_aux_file_users_data(client_id), "w") as aux_file:
-#             json.dump(serializable_data, aux_file)  # Write JSON data
-#             # aux_file.write("\n")  # Add a newline to separate JSON from messages
-#         os.rename(get_aux_file_users_data(client_id), get_backup_file_users_data(client_id)) # Atomic
-#         print(f"[birthday_dictionary] Worker {WORKER_INDEX} saved state(user_data) to {get_backup_file_users_data(client_id)} atomically")
-#     except Exception as e:
-#         print(f"[birthday_dictionary] ERROR saving state(user_data) to disk: {e}", file=sys.stderr)
-
 def save_top_users_state_to_disk(messages_by_client, message_count_by_client, last_message_per_sender):
     try:
         os.makedirs(PERSISTENCE_DIR, exist_ok=True)
 
         serializable_data = {
-            # "client_store_user_counter": {
-            #     client_id: {
-            #         store_id: dict(user_counter)
-            #         for store_id, user_counter in store_users_data.items()
-            #     }
-            #     for client_id, store_users_data in client_store_user_counter.items()
-            # },
-            # "end_messages": dict(client_end_messages),
             "messages_by_client": dict(messages_by_client),
             "message_count_by_client": dict(message_count_by_client),
             "last_message_per_sender": dict(last_message_per_sender)
