@@ -208,8 +208,8 @@ def generate_compose_file():
             wln(2, "depends_on:")
             wln(3, "- rabbitmq_server")
             wln(3, "- gateway")
-            # wln(2, "volumes:")
-            # wln(3, f"- ./persistence/categorizer_q2_worker_{i + 1}:/app/persistence")
+            wln(2, "volumes:")
+            wln(3, f"- ./persistence/categorizer_q2_worker_{i}:/app/persistence")
             f.write("\n")
 
         # ====================
@@ -235,8 +235,8 @@ def generate_compose_file():
             wln(2, "depends_on:")
             wln(3, "- rabbitmq_server")
             wln(2, "volumes:")
-            wln(3, "- ./data/received:/app/data/received")
-            # wln(3, f"- ./persistence/categorizer_q3_worker_{i + 1}:/app/persistence")
+            # wln(3, "- ./data/received:/app/data/received")
+            wln(3, f"- ./persistence/categorizer_q3_worker_{i + 1}:/app/persistence")
             f.write("\n")
 
         # ====================
@@ -263,8 +263,8 @@ def generate_compose_file():
             wln(2, "depends_on:")
             wln(3, "- rabbitmq_server")
             wln(3, "- gateway")
-            # wln(2, "volumes:")
-            # wln(3, f"- ./persistence/birthday_dictionary_worker_{i}:/app/persistence")
+            wln(2, "volumes:")
+            wln(3, f"- ./persistence/birthday_dictionary_worker_{i}:/app/persistence")
             f.write("\n")
 
         # ====================
@@ -291,8 +291,8 @@ def generate_compose_file():
             wln(2, "depends_on:")
             wln(3, "- rabbitmq_server")
             wln(3, "- gateway")
-            # wln(2, "volumes:")
-            # wln(3, f"- ./persistence/categorizer_q4_worker_{i + 1}:/app/persistence")
+            wln(2, "volumes:")
+            wln(3, f"- ./persistence/categorizer_q4_worker_{i + 1}:/app/persistence")
             f.write("\n")
             
         # ====================
