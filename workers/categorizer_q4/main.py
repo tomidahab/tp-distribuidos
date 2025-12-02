@@ -112,7 +112,7 @@ def listen_for_transactions():
                 return
             
             # Skip message if duplicated
-            if last_message_per_sender[sender_id] == message_id:
+            if sender_id in last_message_per_sender and last_message_per_sender[sender_id] == message_id:
                 print(f"[categorizer_q4] A DUPLICATED MESSAGE WAS RECEIVED, IGNORING IT", flush=True)
 
                 # Send ack for duplicated message
@@ -219,7 +219,8 @@ def send_client_q4_results(client_id, store_user_counter):
         print(f"[categorizer_q4] STEP 3 {client_id}")
         
         # Send a single message with all top users for all stores
-        message, _ = build_message(client_id, 4, 1, rows)
+        outgoing_sender = f"categorier_q4_worker_{WORKER_INDEX}"
+        message, _ = build_message(client_id, 4, 1, rows, sender=outgoing_sender)
         birthday_dict_exchange.send(message, routing_key=f"client.{worker_index}")
         print(f"[categorizer_q4] Worker {WORKER_INDEX} sent ALL top users for client {client_id} to Birthday_Dictionary with routing key client.{worker_index}: {rows}")
         birthday_dict_exchange.close()
@@ -273,7 +274,7 @@ def recover_state():
     """
     client_store_user_counter = defaultdict(lambda: defaultdict(Counter))
     client_end_messages = defaultdict(int)
-    last_message_per_sender = defaultdict(lambda: defaultdict(int))
+    last_message_per_sender = defaultdict(str)
     messages = []
 
     # Check if the auxiliary file exists
