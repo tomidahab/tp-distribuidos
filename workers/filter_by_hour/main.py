@@ -3,6 +3,7 @@ import os
 import signal
 import time
 import sys
+import json
 from collections import defaultdict
 
 from common.health_check_receiver import HealthCheckReceiver
@@ -23,7 +24,7 @@ NUMBER_OF_YEAR_WORKERS = int(os.environ.get('NUMBER_OF_YEAR_WORKERS', '3'))
 
 SEMESTER_KEYS_FOR_FANOUT = ['semester.2023-1', 'semester.2024-1', 'semester.2024-2','semester.2025-1']
 
-# File to persist last processed message_id per sender
+# File to persist processed message_ids per sender
 PERSISTENCE_DIR = "/app/persistence"
 
 def get_persistence_file(sender):
@@ -132,11 +133,6 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
     global rows_received, rows_sent_to_amount, rows_sent_to_q3, end_messages_received, client_end_messages, completed_clients, client_stats
     global filter_by_amount_exchange, categorizer_q3_topic_exchange, categorizer_q3_fanout_exchange
     
-    if should_stop.is_set():  # Don't process if we're stopping
-        if delivery_tag and channel:
-            channel.basic_nack(delivery_tag=delivery_tag, requeue=True)
-        return
-        
     try:
         # print(f"[filter_by_hour] Worker {WORKER_INDEX} received a message!", flush=True)
         parsed_message = parse_message(message)
@@ -166,6 +162,18 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
                 channel.basic_ack(delivery_tag=delivery_tag)
             return
         
+        # Check if we're stopping AFTER parsing and duplicate detection
+        if should_stop.is_set():  # Don't process if we're stopping
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} should_stop detected, saving message_id and ACKing to prevent reprocessing", flush=True)
+            # Save message_id to prevent reprocessing after restart
+            if message_id and sender_id:
+                save_last_processed_message_id(sender_id, message_id)
+                print(f"[filter_by_hour] Worker {WORKER_INDEX} saved message_id during shutdown for sender {sender_id}: {message_id}", flush=True)
+            # ACK to avoid requeue since we've marked it as processed
+            if delivery_tag and channel:
+                channel.basic_ack(delivery_tag=delivery_tag)
+            return
+        
         # Process message - no in-memory duplicate check by client (removed to avoid conflicts)
         if message_id:
             print(f"[filter_by_hour] Worker {WORKER_INDEX} processing message_id {message_id} for client {client_id} from sender {sender_id}", flush=True)
@@ -184,6 +192,12 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
         # Skip if client already completed - check AFTER processing END message
         if client_id in completed_clients:
             print(f"[filter_by_hour] Worker {WORKER_INDEX} SKIPPING message from completed client {client_id} with {len(parsed_message['rows'])} rows, is_last={is_last}")
+            
+            # CRITICAL: Save message_id even when skipping to prevent reprocessing after restart
+            if message_id and sender_id:
+                save_last_processed_message_id(sender_id, message_id)
+                print(f"[filter_by_hour] Worker {WORKER_INDEX} saved skipped message_id for sender {sender_id}: {message_id}", flush=True)
+            
             # ACK the message even if skipping to avoid requeue
             if delivery_tag and channel:
                 channel.basic_ack(delivery_tag=delivery_tag)

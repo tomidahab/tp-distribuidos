@@ -1,9 +1,9 @@
-import heapq
 import os
 import signal
 import sys
-from collections import defaultdict
+from collections import defaultdict, Counter
 import time
+import json
 from common.health_check_receiver import HealthCheckReceiver
 from common.protocol import build_message, parse_message, row_to_dict
 from common.middleware import MessageMiddlewareExchange, MessageMiddlewareDisconnectedError, MessageMiddlewareMessageError, MessageMiddlewareQueue
@@ -21,6 +21,9 @@ NUMBER_OF_YEAR_WORKERS = int(os.environ.get('NUMBER_OF_YEAR_WORKERS', '3'))
 receiver_queue = None
 birthday_dict_queue = None
 
+# Global variable for client_store_user_counter
+global_client_store_user_counter = defaultdict(lambda: defaultdict(Counter))
+
 def _close_queue(queue):
     if queue:
         queue.close()
@@ -29,20 +32,65 @@ def _sigterm_handler(signum, _):
     _close_queue(receiver_queue)
     _close_queue(birthday_dict_queue)
 
-def get_top_users(users_counter, n=3):
-    items = users_counter.items()
-    return heapq.nlargest(
-        n,
-        items,
-        key=lambda x: (x[1], x[0]) # Top by count, then by id
-    )
+def init(filename="backup_data.txt"):
+    """
+    Initializes the global client_store_user_counter dictionary and client_end_messages by:
+    1. Loading the dictionary from the backup_data file (if it exists).
+    2. Updating the dictionary with rows appended after the backup.
+    """
+    global global_client_store_user_counter, client_end_messages
+
+    client_end_messages = defaultdict(int)  # Initialize END message counter
+
+    try:
+        # Step 1: Load the dictionary from the backup file
+        if os.path.exists(filename):
+            with open(filename, "r") as backup_file:
+                lines = backup_file.readlines()
+            
+            # Separate the JSON dictionary (first part) and appended rows (remaining lines)
+            if lines:
+                # Load the JSON dictionary from the first part of the file
+                json_data = lines[0]
+                restored_data = json.loads(json_data)
+                # Restore client_store_user_counter
+                global_client_store_user_counter = defaultdict(
+                    lambda: defaultdict(Counter),
+                    {
+                        client_id: defaultdict(Counter, {
+                            store_id: Counter(user_counter)
+                            for store_id, user_counter in store_data["store_data"].items()
+                        })
+                        for client_id, store_data in restored_data.items()
+                    }
+                )
+                # Restore client_end_messages
+                client_end_messages = defaultdict(
+                    int,
+                    {client_id: store_data["end_messages"] for client_id, store_data in restored_data.items()}
+                )
+                print(f"[categorizer_q4] Successfully restored client_store_user_counter and END messages from {filename}")
+            
+            # Step 2: Update the dictionary with appended rows
+            for row in lines[1:]:  # Skip the first line (JSON dictionary)
+                row = row.strip()
+                if row:
+                    # Parse the row and update the dictionary
+                    store_id, user_id, count = row.split(",")
+                    count = int(count)
+                    for client_id in global_client_store_user_counter:
+                        global_client_store_user_counter[client_id][store_id][int(user_id)] += count
+            print(f"[categorizer_q4] Updated client_store_user_counter with appended rows from {filename}")
+        else:
+            print(f"[categorizer_q4] No backup file found. Starting with an empty client_store_user_counter.")
+    except Exception as e:
+        print(f"[categorizer_q4] ERROR initializing from backup: {e}", file=sys.stderr)
 
 def listen_for_transactions():
-    # Per-client store-user tracking: {client_id: {store_id: Counter(user_id: count)}}
-    client_store_user_counter = defaultdict(lambda: defaultdict(lambda: defaultdict(int)))
-    # Track END messages per client: {client_id: count}
+    global global_client_store_user_counter
     client_end_messages = defaultdict(int)
     completed_clients = set()
+    row_counter = 0  # Counter to track the number of rows processed
 
     topic_routing_key = f"store.{WORKER_INDEX}"
     print(f"[categorizer_q4] Worker index: {WORKER_INDEX}, routing key: {topic_routing_key}")
@@ -64,8 +112,8 @@ def listen_for_transactions():
 
     print(f"[categorizer_q4] Listening for transactions on queue: {RECEIVER_QUEUE} (topic key: {topic_routing_key})")
 
-    def on_message_callback(message: bytes):
-        nonlocal completed_clients
+    def on_message_callback(message: bytes, delivery_tag=None, channel=None):
+        nonlocal completed_clients, row_counter
         try:
             parsed_message = parse_message(message)
             type_of_message = parsed_message['csv_type']
@@ -76,16 +124,28 @@ def listen_for_transactions():
             if client_id in completed_clients:
                 print(f"[categorizer_q4] Worker {WORKER_INDEX} ignoring message for already completed client {client_id}")
                 return
-                
-            # print(f"[categorizer_q4] Worker {WORKER_INDEX} processing message for client {client_id}, is_last={is_last}, rows: {len(parsed_message['rows'])}")
             
+            batch_rows = []  # Collect rows for batch writing
             for row in parsed_message['rows']:
+                batch_rows.append(row)
+                row_counter += 1
+
                 dic_fields_row = row_to_dict(row, type_of_message)
                 store_id = dic_fields_row.get('store_id')
                 user_id = dic_fields_row.get('user_id')
                 if None not in (store_id, user_id) and store_id != '' and user_id != '':
-                    client_store_user_counter[client_id][store_id][int(float(user_id))] += 1
-            
+                    global_client_store_user_counter[client_id][store_id][int(float(user_id))] += 1
+
+            # Write the batch of rows to the file all at once
+            if batch_rows:
+                with open("backup_data.txt", "a") as backup_file:
+                    backup_file.write("\n".join(batch_rows) + "\n")
+                print(f"[categorizer_q4] Batch of {len(batch_rows)} rows written to backup_data.txt")
+
+            # Every 500 rows, write the full dictionary to the backup file
+            if row_counter % 500 == 0:
+                write_backup_data(global_client_store_user_counter, client_end_messages)
+
             if is_last:
                 client_end_messages[client_id] += 1
                 print(f"[categorizer_q4] Worker {WORKER_INDEX} received END message {client_end_messages[client_id]}/{NUMBER_OF_YEAR_WORKERS} for client {client_id}")
@@ -95,12 +155,14 @@ def listen_for_transactions():
                     completed_clients.add(client_id)
                     
                     # Process and send results for this client
-                    send_client_q4_results(client_id, client_store_user_counter[client_id])
+                    send_client_q4_results(client_id, global_client_store_user_counter[client_id])
                     
-                    # Don't delete client data yet - keep it for potential debugging
-                    # but mark as completed
                     print(f"[categorizer_q4] Client {client_id} processing completed")
-                        
+
+            # Send acknowledgment after processing the batch
+            if channel and delivery_tag:
+                channel.basic_ack(delivery_tag=delivery_tag)
+                print(f"[categorizer_q4] Acknowledged message with delivery tag {delivery_tag}")
         except Exception as e:
             print(f"[categorizer_q4] Error processing message: {e}", file=sys.stderr)
 
@@ -113,13 +175,12 @@ def listen_for_transactions():
     finally:
         receiver_queue.close()
         # fanout_queue.close()
-    return client_store_user_counter
 
 def get_top_users_per_store(store_user_counter, top_n=3):
     # Returns {store_id: [(user_id, purchase_count), ...]}
     top_users = {}
     for store_id, user_counter in store_user_counter.items():
-        top_users[store_id] = get_top_users(user_counter)
+        top_users[store_id] = user_counter.most_common(top_n)
     return top_users
 
 def send_client_q4_results(client_id, store_user_counter):
@@ -151,6 +212,42 @@ def send_client_q4_results(client_id, store_user_counter):
         print(f"[categorizer_q4] ERROR sending results for client {client_id}: {e}", file=sys.stderr)
         # Don't raise to avoid stopping other clients
 
+def write_backup_data(client_store_user_counter, client_end_messages, filename="backup_data.txt"):
+    """
+    Writes the client_store_user_counter dictionary and client_end_messages to a file, overwriting any existing data.
+    The dictionary is serialized to JSON format for easy readability and restoration.
+    """
+    try:
+        # Convert defaultdict and Counter objects to regular dictionaries for JSON serialization
+        serializable_data = {
+            client_id: {
+                "store_data": {
+                    store_id: dict(user_counter)
+                    for store_id, user_counter in store_data.items()
+                },
+                "end_messages": client_end_messages[client_id]
+            }
+            for client_id, store_data in client_store_user_counter.items()
+        }
+        # Write the serialized data to the file
+        with open(filename, "w") as backup_file:
+            json.dump(serializable_data, backup_file, indent=4)
+        print(f"[categorizer_q4] Backup data written to {filename}")
+    except Exception as e:
+        print(f"[categorizer_q4] ERROR writing backup data: {e}", file=sys.stderr)
+
+def append_to_backup_data(row, filename="backup_data.txt"):
+    """
+    Appends a single row to the backup_data file.
+    Each row is written as a new line in the file.
+    """
+    try:
+        with open(filename, "a") as backup_file:
+            backup_file.write(row + "\n")
+        print(f"[categorizer_q4] Appended row to {filename}: {row}")
+    except Exception as e:
+        print(f"[categorizer_q4] ERROR appending row to backup data: {e}", file=sys.stderr)
+
 def main():
     signal.signal(signal.SIGTERM, _sigterm_handler)
     signal.signal(signal.SIGINT, _sigterm_handler)
@@ -159,7 +256,8 @@ def main():
     health_check_receiver.start()
 
     time.sleep(30)
-    client_store_user_counter = listen_for_transactions()
+    init()  
+    listen_for_transactions()
     print("[categorizer_q4] All clients processed successfully.")
 
 if __name__ == "__main__":

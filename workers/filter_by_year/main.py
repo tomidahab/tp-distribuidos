@@ -2,6 +2,7 @@ import os
 import signal
 import sys
 import threading
+import json
 from time import sleep
 from datetime import datetime
 from common.protocol import parse_message, row_to_dict, build_message
@@ -30,41 +31,41 @@ CATEGORIZER_Q4_TOPIC_EXCHANGE = os.environ.get('CATEGORIZER_Q4_TOPIC_EXCHANGE', 
 CATEGORIZER_Q4_FANOUT_EXCHANGE = os.environ.get('CATEGORIZER_Q4_FANOUT_EXCHANGE', 'categorizer_q4_fanout_exchange')
 CATEGORIZER_Q4_WORKERS = int(os.environ.get('CATEGORIZER_Q4_WORKERS', 3))
 
-# File to persist last processed message_id per sender
+# File to persist processed message_ids per sender
 PERSISTENCE_DIR = "/app/persistence"
 
-def get_persistence_file(sender):
-    """Get the persistence file path for a specific sender"""
-    return f"{PERSISTENCE_DIR}/worker_{WORKER_INDEX}_last_message_sender_{sender}.txt"
+def get_persistence_file(sender, message_type):
+    """Get the persistence file path for a specific sender and message type"""
+    return f"{PERSISTENCE_DIR}/worker_{WORKER_INDEX}_last_message_sender_{sender}_type_{message_type}.txt"
 
-def load_last_processed_message_id(sender):
-    """Load the last processed message_id from disk for a specific sender"""
+def load_last_processed_message_id(sender, message_type):
+    """Load the last processed message_id from disk for a specific sender and message type"""
     try:
-        persistence_file = get_persistence_file(sender)
+        persistence_file = get_persistence_file(sender, message_type)
         if os.path.exists(persistence_file):
             with open(persistence_file, 'r') as f:
                 message_id = f.read().strip()
-                print(f"[filter_by_year] Worker {WORKER_INDEX} loaded last message_id for sender {sender}: {message_id}", flush=True)
+                print(f"[filter_by_year] Worker {WORKER_INDEX} loaded last message_id for sender {sender} type {message_type}: {message_id}", flush=True)
                 return message_id
         else:
-            print(f"[filter_by_year] Worker {WORKER_INDEX} no persistence file found for sender {sender}, starting fresh", flush=True)
+            print(f"[filter_by_year] Worker {WORKER_INDEX} no persistence file found for sender {sender} type {message_type}, starting fresh", flush=True)
             return None
     except Exception as e:
-        print(f"[filter_by_year] Worker {WORKER_INDEX} ERROR loading persistence for sender {sender}: {e}", flush=True)
+        print(f"[filter_by_year] Worker {WORKER_INDEX} ERROR loading persistence for sender {sender} type {message_type}: {e}", flush=True)
         return None
 
-def save_last_processed_message_id(sender, message_id):
-    """Save the last processed message_id to disk for a specific sender"""
+def save_last_processed_message_id(sender, message_id, message_type):
+    """Save the last processed message_id to disk for a specific sender and message type"""
     try:
         # Create persistence directory if it doesn't exist
         os.makedirs(PERSISTENCE_DIR, exist_ok=True)
         
-        persistence_file = get_persistence_file(sender)
+        persistence_file = get_persistence_file(sender, message_type)
         with open(persistence_file, 'w') as f:
             f.write(message_id)
-        print(f"[filter_by_year] Worker {WORKER_INDEX} saved message_id to disk for sender {sender}: {message_id}", flush=True)
+        print(f"[filter_by_year] Worker {WORKER_INDEX} saved message_id to disk for sender {sender} type {message_type}: {message_id}", flush=True)
     except Exception as e:
-        print(f"[filter_by_year] Worker {WORKER_INDEX} ERROR saving persistence for sender {sender}: {e}", flush=True)
+        print(f"[filter_by_year] Worker {WORKER_INDEX} ERROR saving persistence for sender {sender} type {message_type}: {e}", flush=True)
 
 receiver_exchange_t = None
 receiver_exchange_t_items = None
@@ -130,13 +131,13 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
         
         # Load last processed message_id from disk for this sender if not loaded yet
         if sender_id and sender_id not in on_message_callback_transactions._disk_last_message_id_by_sender:
-            disk_last_message_id = load_last_processed_message_id(sender_id)
+            disk_last_message_id = load_last_processed_message_id(sender_id, "transactions")
             on_message_callback_transactions._disk_last_message_id_by_sender[sender_id] = disk_last_message_id
-            print(f"[filter_by_year] Worker {WORKER_INDEX} initialized disk persistence for sender {sender_id}", flush=True)
+            print(f"[filter_by_year] Worker {WORKER_INDEX} initialized disk persistence for sender {sender_id} type transactions", flush=True)
         
         # Check if this is a duplicate message from this sender (message we processed before restart)
         if message_id and sender_id and message_id == on_message_callback_transactions._disk_last_message_id_by_sender.get(sender_id):
-            print(f"[filter_by_year] Worker {WORKER_INDEX} DUPLICATE message detected from disk persistence for sender {sender_id}, message_id {message_id} - skipping (container restart recovery)", flush=True)
+            print(f"[filter_by_year] Worker {WORKER_INDEX} DUPLICATE message detected from disk persistence for sender {sender_id}, message_id {message_id} type transactions - skipping (container restart recovery)", flush=True)
             # ACK the duplicate message to avoid reprocessing
             if delivery_tag and channel:
                 channel.basic_ack(delivery_tag=delivery_tag)
@@ -217,9 +218,9 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
                 hour_filter_exchange.send(end_message, routing_key=routing_key)
                 print(f"[filter_by_year] Worker {WORKER_INDEX} Sent END message for client {client_id} to filter_by_hour worker {i} via topic exchange", flush=True)
             
-            # Send messages for Q4 workers
-            for store_id in range(CATEGORIZER_Q4_WORKERS):
-                routing_key = f"store.{store_id % CATEGORIZER_Q4_WORKERS}"
+            # Send messages for Q4 workers - ensure all workers get END message
+            for worker_id in range(CATEGORIZER_Q4_WORKERS):
+                routing_key = f"store.{worker_id}"
                 q4_message, _ = build_message(client_id, type_of_message, 1, [], sender=outgoing_sender)
                 categorizer_q4_topic_exchange.send(q4_message, routing_key=routing_key)
                 print(f"[filter_by_year] Worker {WORKER_INDEX} client {client_id}: Sent END message to categorizer_q4 with routing_key={routing_key}")
@@ -236,8 +237,11 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
 
     # CRITICAL: Save message_id to disk AFTER successful message sending to prevent message loss
     if message_id and sender_id:
-        save_last_processed_message_id(sender_id, message_id)
-        print(f"[filter_by_year] Worker {WORKER_INDEX} saved message_id to disk for sender {sender_id}: {message_id}", flush=True)
+        # Update in-memory tracking
+        on_message_callback_transactions._disk_last_message_id_by_sender[sender_id] = message_id
+        # Save to disk for persistence across restarts
+        save_last_processed_message_id(sender_id, message_id, "transactions")
+        print(f"[filter_by_year] Worker {WORKER_INDEX} saved message_id to disk for sender {sender_id} type transactions: {message_id}", flush=True)
     
     # Manual ACK: Only acknowledge after successful processing and persistence
     if delivery_tag and channel:
@@ -262,13 +266,13 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
         
         # Load last processed message_id from disk for this sender if not loaded yet
         if sender_id and sender_id not in on_message_callback_t_items._disk_last_message_id_by_sender:
-            disk_last_message_id = load_last_processed_message_id(sender_id)
+            disk_last_message_id = load_last_processed_message_id(sender_id, "transaction_items")
             on_message_callback_t_items._disk_last_message_id_by_sender[sender_id] = disk_last_message_id
             print(f"[filter_by_year] Worker {WORKER_INDEX} initialized disk persistence for T_ITEMS sender {sender_id}", flush=True)
         
         # Check if this is a duplicate message from this sender (message we processed before restart)
         if message_id and sender_id and message_id == on_message_callback_t_items._disk_last_message_id_by_sender.get(sender_id):
-            print(f"[filter_by_year] Worker {WORKER_INDEX} DUPLICATE T_ITEMS message detected from disk persistence for sender {sender_id}, message_id {message_id} - skipping (container restart recovery)", flush=True)
+            print(f"[filter_by_year] Worker {WORKER_INDEX} DUPLICATE T_ITEMS message detected from disk persistence for sender {sender_id}, message_id {message_id} type transaction_items - skipping (container restart recovery)", flush=True)
             # ACK the duplicate message to avoid reprocessing
             if delivery_tag and channel:
                 channel.basic_ack(delivery_tag=delivery_tag)
@@ -308,7 +312,8 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
             
             outgoing_sender = f"filter_by_year_worker_{WORKER_INDEX}"
             end_message, _ = build_message(client_id, type_of_message, is_last, [], sender=outgoing_sender)
-            for month in range(1, 13, 13 // NUMBER_OF_Q2_CATEGORIZER_WORKERS):
+            # Send END message to all possible months (1-12) to ensure all categorizer_q2 workers receive it
+            for month in range(1, 13):
                 routing_key = f"month.{month}"
                 item_categorizer_exchange.send(end_message, routing_key=routing_key)
                 print(f"[filter_by_year] Worker {WORKER_INDEX} client {client_id}: Sent END message to categorizer_q2 with routing key {routing_key}")
@@ -325,9 +330,12 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
 
     # CRITICAL: Save message_id to disk AFTER successful message sending to prevent message loss
     if message_id and sender_id:
-        save_last_processed_message_id(sender_id, message_id)
-        print(f"[filter_by_year] Worker {WORKER_INDEX} saved message_id to disk for sender {sender_id}: {message_id}", flush=True)
-    
+        # Update in-memory tracking
+        on_message_callback_t_items._disk_last_message_id_by_sender[sender_id] = message_id
+        # Save to disk for persistence across restarts  
+        save_last_processed_message_id(sender_id, message_id, "transaction_items")
+        print(f"[filter_by_year] Worker {WORKER_INDEX} saved message_id to disk for sender {sender_id} type transaction_items: {message_id}", flush=True)
+
     # Manual ACK
     if delivery_tag and channel:
         channel.basic_ack(delivery_tag=delivery_tag)

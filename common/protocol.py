@@ -178,7 +178,7 @@ def parse_message(message: bytes) -> Dict:
                                 payload_text = payload.decode("utf-8")
                                 rows = payload_text.split("\n") if payload_text else []
                                 
-                                print(f"[parse_message] NEW protocol detected: sender={sender}, csv_type={csv_type}", flush=True)
+                                #print(f"[parse_message] NEW protocol detected: sender={sender}, csv_type={csv_type}", flush=True)
                                 
                                 return {
                                     "client_id": client_id,

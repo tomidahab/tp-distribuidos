@@ -48,7 +48,7 @@ class Gateway:
         self.results_lock = threading.RLock()
         
         # Track duplicate messages by sender to prevent duplicate results (in-memory only)
-        self.processed_messages_by_sender = {}  # {sender: set(message_ids)}
+        self.last_message_id_by_sender = {}  # {sender: last_message_id}
         self.duplicates_lock = threading.RLock()
 
     def _sigterm_handler(self, signum, _):
@@ -68,7 +68,7 @@ class Gateway:
         sleep(config.MIDDLEWARE_UP_TIME)  # Esperar a que RabbitMQ esté listo
         queue = MessageMiddlewareQueue(os.environ.get('RABBITMQ_HOST', 'rabbitmq_server'), Q4_DATA_REQUESTS_QUEUE)
 
-        def on_message_callback(message: bytes):
+        def on_message_callback(message: bytes, delivery_tag=None, channel=None):
             try:
                 # Parse message to get client_id
                 parsed_msg = parse_message(message)
@@ -77,12 +77,19 @@ class Gateway:
                 
                 with self.clients_lock:
                     self.clients[client_id].handle_q4_data_request()
+                
+                # Manual ACK after successful processing
+                if delivery_tag and channel:
+                    channel.basic_ack(delivery_tag=delivery_tag)
                         
             except Exception as e:
                 logging.error(f"[{Q4_DATA_REQUESTS_QUEUE}] Error handling Q4 request: {e}")
+                # NACK on error to requeue
+                if delivery_tag and channel:
+                    channel.basic_nack(delivery_tag=delivery_tag, requeue=True)
 
         try:
-            queue.start_consuming(on_message_callback)
+            queue.start_consuming(on_message_callback, auto_ack=False)
         except Exception as e:
             logging.error(f"[{Q4_DATA_REQUESTS_QUEUE}] Error consumiendo mensajes: {e}")
     
@@ -101,32 +108,44 @@ class Gateway:
         logging.info(f"[{result_queue}] Waiting for messages in {result_queue}")
         queue = MessageMiddlewareQueue(os.environ.get('RABBITMQ_HOST', 'rabbitmq_server'), result_queue)
         
-        def on_message_callback(message: bytes):
-            # Handle message by client
-            parsed_message = parse_message(message)
-            client_id = parsed_message.get('client_id')
-            message_id = parsed_message.get('message_id', '')
-            sender = parsed_message.get('sender', 'unknown')
-            
-            # Check for duplicate messages from the same sender (in-memory only since gateway doesn't restart)
-            with self.duplicates_lock:
-                if sender not in self.processed_messages_by_sender:
-                    self.processed_messages_by_sender[sender] = set()
+        def on_message_callback(message: bytes, delivery_tag=None, channel=None):
+            try:
+                # Handle message by client
+                parsed_message = parse_message(message)
+                client_id = parsed_message.get('client_id')
+                message_id = parsed_message.get('message_id', '')
+                sender = parsed_message.get('sender', 'unknown')
                 
-                if message_id in self.processed_messages_by_sender[sender]:
-                    logging.info(f"[{result_queue}] DUPLICATE message detected from sender {sender}, message_id {message_id} - skipping")
-                    return
-                
-                # Add message_id to processed set for this sender
-                if message_id:
-                    self.processed_messages_by_sender[sender].add(message_id)
+                # Check for duplicate messages from the same sender (simple last message_id comparison)
+                with self.duplicates_lock:
+                    last_msg_id = self.last_message_id_by_sender.get(sender)
+                    
+                    if message_id and message_id == last_msg_id:
+                        logging.info(f"[{result_queue}] DUPLICATE message detected from sender {sender}, message_id {message_id} (same as last) - skipping")
+                        # ACK duplicate to avoid requeue
+                        if delivery_tag and channel:
+                            channel.basic_ack(delivery_tag=delivery_tag)
+                        return
+                    
+                    # Update last message_id for this sender
+                    if message_id:
+                        self.last_message_id_by_sender[sender] = message_id
+                        logging.debug(f"[{result_queue}] Updated last message_id for sender {sender}: {message_id}")
 
-            with self.clients_lock:
-                self.clients[client_id].handle_message(self.queue_to_query(result_queue), parsed_message)
-            #
-            return
+                with self.clients_lock:
+                    self.clients[client_id].handle_message(self.queue_to_query(result_queue), parsed_message)
+                
+                # Manual ACK after successful processing
+                if delivery_tag and channel:
+                    channel.basic_ack(delivery_tag=delivery_tag)
+                    
+            except Exception as e:
+                logging.error(f"[{result_queue}] Error handling result message: {e}")
+                # NACK on error to requeue
+                if delivery_tag and channel:
+                    channel.basic_nack(delivery_tag=delivery_tag, requeue=True)
         try:
-            queue.start_consuming(on_message_callback)
+            queue.start_consuming(on_message_callback, auto_ack=False)
         except Exception as e:
             logging.error(f"[{result_queue}] Error consumiendo mensajes: {e}")
 

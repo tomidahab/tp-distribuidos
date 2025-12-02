@@ -303,6 +303,8 @@ services:
     depends_on:
       - rabbitmq_server
       - gateway
+    volumes:
+      - ./persistence/categorizer_q2_worker_1:/app/persistence
 
   categorizer_q2_worker_2:
     build:
@@ -325,6 +327,8 @@ services:
     depends_on:
       - rabbitmq_server
       - gateway
+    volumes:
+      - ./persistence/categorizer_q2_worker_2:/app/persistence
 
   categorizer_q2_worker_3:
     build:
@@ -347,6 +351,8 @@ services:
     depends_on:
       - rabbitmq_server
       - gateway
+    volumes:
+      - ./persistence/categorizer_q2_worker_3:/app/persistence
 
   categorizer_q3_worker_1:
     build:
