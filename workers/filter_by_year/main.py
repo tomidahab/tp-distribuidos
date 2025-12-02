@@ -218,9 +218,9 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
                 hour_filter_exchange.send(end_message, routing_key=routing_key)
                 print(f"[filter_by_year] Worker {WORKER_INDEX} Sent END message for client {client_id} to filter_by_hour worker {i} via topic exchange", flush=True)
             
-            # Send messages for Q4 workers
-            for store_id in range(CATEGORIZER_Q4_WORKERS):
-                routing_key = f"store.{store_id % CATEGORIZER_Q4_WORKERS}"
+            # Send messages for Q4 workers - ensure all workers get END message
+            for worker_id in range(CATEGORIZER_Q4_WORKERS):
+                routing_key = f"store.{worker_id}"
                 q4_message, _ = build_message(client_id, type_of_message, 1, [], sender=outgoing_sender)
                 categorizer_q4_topic_exchange.send(q4_message, routing_key=routing_key)
                 print(f"[filter_by_year] Worker {WORKER_INDEX} client {client_id}: Sent END message to categorizer_q4 with routing_key={routing_key}")
@@ -237,6 +237,9 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
 
     # CRITICAL: Save message_id to disk AFTER successful message sending to prevent message loss
     if message_id and sender_id:
+        # Update in-memory tracking
+        on_message_callback_transactions._disk_last_message_id_by_sender[sender_id] = message_id
+        # Save to disk for persistence across restarts
         save_last_processed_message_id(sender_id, message_id, "transactions")
         print(f"[filter_by_year] Worker {WORKER_INDEX} saved message_id to disk for sender {sender_id} type transactions: {message_id}", flush=True)
     
@@ -309,7 +312,8 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
             
             outgoing_sender = f"filter_by_year_worker_{WORKER_INDEX}"
             end_message, _ = build_message(client_id, type_of_message, is_last, [], sender=outgoing_sender)
-            for month in range(1, 13, 13 // NUMBER_OF_Q2_CATEGORIZER_WORKERS):
+            # Send END message to all possible months (1-12) to ensure all categorizer_q2 workers receive it
+            for month in range(1, 13):
                 routing_key = f"month.{month}"
                 item_categorizer_exchange.send(end_message, routing_key=routing_key)
                 print(f"[filter_by_year] Worker {WORKER_INDEX} client {client_id}: Sent END message to categorizer_q2 with routing key {routing_key}")
@@ -323,6 +327,14 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
         if delivery_tag and channel:
             channel.basic_nack(delivery_tag=delivery_tag, requeue=True)
         return
+
+    # CRITICAL: Save message_id to disk AFTER successful message sending to prevent message loss
+    if message_id and sender_id:
+        # Update in-memory tracking
+        on_message_callback_t_items._disk_last_message_id_by_sender[sender_id] = message_id
+        # Save to disk for persistence across restarts  
+        save_last_processed_message_id(sender_id, message_id, "transaction_items")
+        print(f"[filter_by_year] Worker {WORKER_INDEX} saved message_id to disk for sender {sender_id} type transaction_items: {message_id}", flush=True)
 
     # Manual ACK
     if delivery_tag and channel:
