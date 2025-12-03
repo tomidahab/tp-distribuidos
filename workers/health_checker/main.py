@@ -30,9 +30,9 @@ class HealthCheckerHandler(threading.Thread):
         while True:
             time.sleep(1)
             send_int(self.skt, 1)
-            cprint(f"Alive message sent to {self.host}:{self.port}")
+            ## cprint(f"Alive message sent to {self.host}:{self.port}")
             recv_int(self.skt)
-            cprint(f"Alive response ok from {self.host}:{self.port}")            
+            ## cprint(f"Alive response ok from {self.host}:{self.port}")            
             
     def run(self):
         while True:
@@ -40,7 +40,7 @@ class HealthCheckerHandler(threading.Thread):
                 time.sleep(2) # Wait some time to let the node be ready
                 self.skt = socket(AF_INET, SOCK_STREAM)
                 self.skt.connect((self.host, self.port))
-                cprint(f"Connected to {self.host}:{self.port}")
+                ## cprint(f"Connected to {self.host}:{self.port}")
 
                 self.send_health_checks()
             except ConnectionError:

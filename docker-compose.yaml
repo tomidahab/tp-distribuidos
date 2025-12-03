@@ -372,7 +372,7 @@ services:
     depends_on:
       - rabbitmq_server
     volumes:
-      - ./data/received:/app/data/received
+      - ./persistence/categorizer_q3_worker_1:/app/persistence
 
   categorizer_q3_worker_2:
     build:
@@ -392,7 +392,7 @@ services:
     depends_on:
       - rabbitmq_server
     volumes:
-      - ./data/received:/app/data/received
+      - ./persistence/categorizer_q3_worker_2:/app/persistence
 
   birthday_dictionary_worker_0:
     build:
@@ -414,6 +414,8 @@ services:
     depends_on:
       - rabbitmq_server
       - gateway
+    volumes:
+      - ./persistence/birthday_dictionary_worker_0:/app/persistence
 
   birthday_dictionary_worker_1:
     build:
@@ -435,6 +437,8 @@ services:
     depends_on:
       - rabbitmq_server
       - gateway
+    volumes:
+      - ./persistence/birthday_dictionary_worker_1:/app/persistence
 
   birthday_dictionary_worker_2:
     build:
@@ -456,6 +460,8 @@ services:
     depends_on:
       - rabbitmq_server
       - gateway
+    volumes:
+      - ./persistence/birthday_dictionary_worker_2:/app/persistence
 
   categorizer_q4_worker_1:
     build:
@@ -477,6 +483,8 @@ services:
     depends_on:
       - rabbitmq_server
       - gateway
+    volumes:
+      - ./persistence/categorizer_q4_worker_1:/app/persistence
 
   categorizer_q4_worker_2:
     build:
@@ -498,6 +506,8 @@ services:
     depends_on:
       - rabbitmq_server
       - gateway
+    volumes:
+      - ./persistence/categorizer_q4_worker_2:/app/persistence
 
   categorizer_q4_worker_3:
     build:
@@ -519,6 +529,8 @@ services:
     depends_on:
       - rabbitmq_server
       - gateway
+    volumes:
+      - ./persistence/categorizer_q4_worker_3:/app/persistence
 
   health_checker_0:
     build:

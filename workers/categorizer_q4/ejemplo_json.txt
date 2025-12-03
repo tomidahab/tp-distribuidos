@@ -1,0 +1,19 @@
+{
+    "client_store_user_counter": {
+        "client1": {
+            "storeA": {"user1": 3, "user2": 1},
+            "storeB": {"user3": 2}
+        },
+        "client2": {
+            "storeC": {"user4": 9}
+        }
+    },
+    "end_messages": {
+        "client1": 1,
+        "client2": 2
+    },
+    "last_message_per_sender": {
+        "filter_by_hour_0": "c4a3f9fd-9d37-4dc3-83e3-f76cfd216644",
+        "filter_by_hour_1": "20f51b15-2b6a-4b92-b40e-b3b51f4e28fb"
+    }
+}
