@@ -167,6 +167,7 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
             print(f"[filter_by_hour] Worker {WORKER_INDEX} should_stop detected, saving message_id and ACKing to prevent reprocessing", flush=True)
             # Save message_id to prevent reprocessing after restart
             if message_id and sender_id:
+                on_message_callback._disk_last_message_id_by_sender[sender_id] = message_id
                 save_last_processed_message_id(sender_id, message_id)
                 print(f"[filter_by_hour] Worker {WORKER_INDEX} saved message_id during shutdown for sender {sender_id}: {message_id}", flush=True)
             # ACK to avoid requeue since we've marked it as processed
@@ -195,6 +196,7 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
             
             # CRITICAL: Save message_id even when skipping to prevent reprocessing after restart
             if message_id and sender_id:
+                on_message_callback._disk_last_message_id_by_sender[sender_id] = message_id
                 save_last_processed_message_id(sender_id, message_id)
                 print(f"[filter_by_hour] Worker {WORKER_INDEX} saved skipped message_id for sender {sender_id}: {message_id}", flush=True)
             
@@ -300,6 +302,7 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
         
         # CRITICAL: Save message_id to disk AFTER successful message sending to prevent message loss
         if message_id and sender_id:
+            on_message_callback._disk_last_message_id_by_sender[sender_id] = message_id
             save_last_processed_message_id(sender_id, message_id)
             print(f"[filter_by_hour] Worker {WORKER_INDEX} saved message_id to disk for sender {sender_id}: {message_id}", flush=True)
         
@@ -345,9 +348,7 @@ def main():
     print(f"[filter_by_hour] Worker {WORKER_INDEX} Environment: CATEGORIZER_Q3_EXCHANGE={CATEGORIZER_Q3_EXCHANGE}", flush=True)
     
     print(f"[filter_by_hour] Worker {WORKER_INDEX} waiting for RabbitMQ to be ready...", flush=True)
-    contents = os.listdir(PERSISTENCE_DIR)
-    if not contents:
-        time.sleep(30)  # Wait for RabbitMQ to be ready
+    time.sleep(30)  # Wait for RabbitMQ to be ready
     print(f"[filter_by_hour] Worker {WORKER_INDEX} RabbitMQ should be ready now!", flush=True)
     
     # Create topic exchange middleware for receiving messages
@@ -357,7 +358,7 @@ def main():
         exchange_name=RECEIVER_EXCHANGE,
         exchange_type='topic',
         queue_name=f"filter_by_hour_worker_{WORKER_INDEX}_queue",
-        routing_keys=[f'hour.{WORKER_INDEX}'],  # Each worker listens to specific routing key
+        routing_keys=[f'hour.{WORKER_INDEX}']  # Each worker listens to specific routing key
     )
     
     print(f"[filter_by_hour] Worker {WORKER_INDEX} connecting to exchanges...", flush=True)
