@@ -345,7 +345,9 @@ def main():
     print(f"[filter_by_hour] Worker {WORKER_INDEX} Environment: CATEGORIZER_Q3_EXCHANGE={CATEGORIZER_Q3_EXCHANGE}", flush=True)
     
     print(f"[filter_by_hour] Worker {WORKER_INDEX} waiting for RabbitMQ to be ready...", flush=True)
-    time.sleep(30)  # Wait for RabbitMQ to be ready
+    contents = os.listdir(PERSISTENCE_DIR)
+    if not contents:
+        time.sleep(30)  # Wait for RabbitMQ to be ready
     print(f"[filter_by_hour] Worker {WORKER_INDEX} RabbitMQ should be ready now!", flush=True)
     
     # Create topic exchange middleware for receiving messages

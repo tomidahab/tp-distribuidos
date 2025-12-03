@@ -359,7 +359,9 @@ def main():
     health_check_receiver.start()
 
     print(f"[filter_by_year] Worker {WORKER_INDEX} starting...")
-    sleep(config.MIDDLEWARE_UP_TIME)  
+    contents = os.listdir(PERSISTENCE_DIR)
+    if not contents:
+        sleep(config.MIDDLEWARE_UP_TIME)  
     print(f"[filter_by_year] Worker {WORKER_INDEX} Connecting to RabbitMQ at {RABBITMQ_HOST}, exchanges: {RECEIVER_EXCHANGE_T}, {RECEIVER_EXCHANGE_T_ITEMS}, filter years: {FILTER_YEARS}")
     
     # Track END messages for both streams

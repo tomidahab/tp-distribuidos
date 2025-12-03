@@ -270,8 +270,9 @@ def main():
     rows_received = 0
     rows_sent = 0
     end_messages_received = 0
-    
-    sleep(config.MIDDLEWARE_UP_TIME)  # Esperar a que RabbitMQ esté listo
+    contents = os.listdir(PERSISTENCE_DIR)
+    if not contents:
+        sleep(config.MIDDLEWARE_UP_TIME)  # Esperar a que RabbitMQ esté listo
     print(f"[filter_by_amount] Worker {WORKER_INDEX} connecting to RabbitMQ at {RABBITMQ_HOST}, exchange: {RECEIVER_EXCHANGE}, filter by min amount: {MIN_AMOUNT}", flush=True)
     
     # Create topic exchange middleware for receiving transaction messages

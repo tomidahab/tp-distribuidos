@@ -102,7 +102,6 @@ def listen_for_transactions():
                 if client_end_messages[client_id] >= NUMBER_OF_HOUR_WORKERS:
                     if client_id not in completed_clients:
                         completed_clients.add(client_id)
-                        send_client_results(client_id, client_semester_store_stats[client_id])
 
             # Skip if client already completed
             if client_id in completed_clients:
@@ -124,6 +123,7 @@ def listen_for_transactions():
                     client_semester_store_stats[client_id][key] += payment_value
                     processed_rows += 1
 
+            last_message_per_sender[parsed_message['sender']] = message_id
         except Exception as e:
             print(f"[categorizer_q3] ERROR processing recovered message: {e}", file=sys.stderr)
 
@@ -402,7 +402,7 @@ def recover_state_from_disk():
                     if not line:
                         continue
                     try:
-                        decoded_message = base64.b64decode(line).decode("utf-8")
+                        decoded_message = base64.b64decode(line)
                         recovered_messages.append(decoded_message)
                     except Exception as e:
                         print(f"[categorizer_q3] Corrupted message detected and skipped: {line}. Error: {e}", file=sys.stderr)
@@ -419,9 +419,11 @@ def main():
     print("[categorizer_q3] MAIN FUNCTION STARTED", flush=True)
     try:
         # Check if a backup file exists
-        if not os.path.exists(BACKUP_FILE):
+        if not os.path.exists(f"{PERSISTENCE_DIR}/eee.txt"):
+            open(f"{PERSISTENCE_DIR}/eee.txt", "w")
             print("[categorizer_q3] No backup file found. Waiting for RabbitMQ to be ready...", flush=True)
             time.sleep(60)  # Wait for RabbitMQ to be ready
+
         else:
             print("[categorizer_q3] Backup file found. Skipping RabbitMQ wait.", flush=True)
 

@@ -676,8 +676,9 @@ def main():
 
         # STEP 2: Wait for RabbitMQ and setup connections FIRST
         print("[categorizer_q2] Waiting for RabbitMQ to be ready...")
-        time.sleep(30)  # Esperar a que RabbitMQ esté listo
-        
+        if not os.path.exists(MENU_ITEMS_FILE):
+            time.sleep(30)  # Esperar a que RabbitMQ esté listo
+            
         # Setup queues and exchanges
         global topic_middleware
         topic_middleware = setup_queue_and_exchanges()
