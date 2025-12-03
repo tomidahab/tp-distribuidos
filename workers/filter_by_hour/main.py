@@ -167,6 +167,7 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
             print(f"[filter_by_hour] Worker {WORKER_INDEX} should_stop detected, saving message_id and ACKing to prevent reprocessing", flush=True)
             # Save message_id to prevent reprocessing after restart
             if message_id and sender_id:
+                on_message_callback._disk_last_message_id_by_sender[sender_id] = message_id
                 save_last_processed_message_id(sender_id, message_id)
                 print(f"[filter_by_hour] Worker {WORKER_INDEX} saved message_id during shutdown for sender {sender_id}: {message_id}", flush=True)
             # ACK to avoid requeue since we've marked it as processed
@@ -195,6 +196,7 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
             
             # CRITICAL: Save message_id even when skipping to prevent reprocessing after restart
             if message_id and sender_id:
+                on_message_callback._disk_last_message_id_by_sender[sender_id] = message_id
                 save_last_processed_message_id(sender_id, message_id)
                 print(f"[filter_by_hour] Worker {WORKER_INDEX} saved skipped message_id for sender {sender_id}: {message_id}", flush=True)
             
@@ -300,6 +302,7 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
         
         # CRITICAL: Save message_id to disk AFTER successful message sending to prevent message loss
         if message_id and sender_id:
+            on_message_callback._disk_last_message_id_by_sender[sender_id] = message_id
             save_last_processed_message_id(sender_id, message_id)
             print(f"[filter_by_hour] Worker {WORKER_INDEX} saved message_id to disk for sender {sender_id}: {message_id}", flush=True)
         
