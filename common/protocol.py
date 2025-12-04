@@ -1,6 +1,8 @@
 import struct
 import uuid
 from typing import List, Tuple, Dict
+import hashlib
+import json
 
 CSV_TYPES = {
     1: "menu_items",
@@ -61,13 +63,15 @@ def build_message(client_id, csv_type: int, is_last: int, rows: List[str], messa
     assert 1 <= csv_type <= 5, "csv_type debe estar entre 1 y 5"
     assert is_last in (0, 1), "is_last debe ser 0 o 1"
     
-    # Generate message_id if not provided
-    if message_id is None:
-        message_id = str(uuid.uuid4())
-    
     # Default sender if not provided
     if sender is None:
         sender = "unknown"
+
+    # Generate message_id if not provided
+    if message_id is None:
+        # message_id = str(uuid.uuid4())
+        # message_id = hashlib.sha512(json.dumps(rows, sort_keys=True).encode()).hexdigest() + f"_{sender}_{str(client_id)}"
+        message_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, json.dumps(rows, sort_keys=True))) + f"_{sender}_{str(client_id)}"
     
     # Convert client_id to string if it's not already
     client_id_str = str(client_id)

@@ -47,7 +47,8 @@ class MessageMiddleware(ABC):
                     on_message_callback(body)
                     ch.basic_ack(delivery_tag=method.delivery_tag)
                 except Exception as e:
-                    ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+                    # ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+                    ch.basic_ack(delivery_tag=method.delivery_tag)
                     raise MessageMiddlewareMessageError(f"Error in message callback: {e}")
         else:
             # Manual ACK mode: pass delivery_tag to callback for manual acknowledgment
@@ -55,7 +56,8 @@ class MessageMiddleware(ABC):
                 try:
                     on_message_callback(body, method.delivery_tag, ch)
                 except Exception as e:
-                    ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+                    # ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
+                    ch.basic_ack(delivery_tag=method.delivery_tag)
                     raise MessageMiddlewareMessageError(f"Error in message callback: {e}")
 
         self.consuming = True

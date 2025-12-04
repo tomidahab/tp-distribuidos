@@ -29,6 +29,21 @@ PERSISTENCE_DIR = "/app/persistence"
 BACKUP_FILE = f"{PERSISTENCE_DIR}/filter_by_hour_worker_{WORKER_INDEX}_backup.txt"
 AUXILIARY_FILE = f"{PERSISTENCE_DIR}/filter_by_hour_worker_{WORKER_INDEX}_backup.tmp"
 
+def print_ok(msg: str):
+    GREEN = "\033[32m"
+    RESET = "\033[0m"
+    print(f"{GREEN}{msg}{RESET}", flush=True)
+
+def print_err(msg: str):
+    RED = "\033[31m"
+    RESET = "\033[0m"
+    print(f"{RED}{msg}{RESET}", flush=True)
+
+def print_warn(msg: str):
+    YELLOW = "\033[33m"
+    RESET = "\033[0m"
+    print(f"{YELLOW}{msg}{RESET}", flush=True)
+
 def get_persistence_file(sender):
     """Get the persistence file path for a specific sender"""
     return f"{PERSISTENCE_DIR}/worker_{WORKER_INDEX}_last_message_sender_{sender}.txt"
@@ -53,11 +68,12 @@ def load_last_processed_message_id(sender):
         print(f"[filter_by_hour] Worker {WORKER_INDEX} ERROR loading persistence for sender {sender}: {e}", flush=True)
         return None
 
-def save_state_to_disk(client_amount_counter, client_end_messages, last_message_per_sender):
+def save_state_to_disk(client_amount_counter, client_end_messages, last_message_per_sender, duplicated_count):
     try:
         os.makedirs(PERSISTENCE_DIR, exist_ok=True)
 
         serializable_data = {
+            "duplicated_count": duplicated_count,
             "client_amount_counter": dict(client_amount_counter),
             "client_end_messages": dict(client_end_messages),
             "last_message_per_sender": dict(last_message_per_sender),
@@ -74,7 +90,8 @@ def save_state_to_disk(client_amount_counter, client_end_messages, last_message_
 def recover_state():
     client_amount_counter = defaultdict(int)
     client_end_messages = defaultdict(int)
-    last_message_per_sender = defaultdict(str)
+    last_message_per_sender = defaultdict(list)
+    duplicated_count = 0
 
     # Check if the auxiliary file exists
     if os.path.exists(AUXILIARY_FILE):
@@ -83,7 +100,7 @@ def recover_state():
 
     if not os.path.exists(BACKUP_FILE):
         print(f"[filter_by_hour] Worker {WORKER_INDEX} no backup file found, starting fresh")
-        return client_amount_counter, client_end_messages, last_message_per_sender
+        return client_amount_counter, client_end_messages, last_message_per_sender, duplicated_count
 
     try:
         with open(BACKUP_FILE, "r") as backup_file:
@@ -95,17 +112,18 @@ def recover_state():
                 # Restore end message per client
                 client_end_messages = defaultdict(int, data["client_end_messages"])
                 # Restore last message IDs
-                last_message_per_sender = defaultdict(str, data["last_message_per_sender"])
+                last_message_per_sender = defaultdict(list, data["last_message_per_sender"])
+                duplicated_count = int(data["duplicated_count"])
 
                 print(f"[filter_by_hour] Successfully recovered state from JSON in {BACKUP_FILE}")
             except json.JSONDecodeError as e:
                 print(f"[filter_by_hour] ERROR parsing JSON from backup file: {e}", file=sys.stderr)
-                return client_amount_counter, client_end_messages, last_message_per_sender
+                return client_amount_counter, client_end_messages, last_message_per_sender, duplicated_count
 
     except Exception as e:
         print(f"[filter_by_hour] ERROR recovering state from {BACKUP_FILE}: {e}", file=sys.stderr)
 
-    return client_amount_counter, client_end_messages, last_message_per_sender
+    return client_amount_counter, client_end_messages, last_message_per_sender, duplicated_count
 
 def save_last_processed_message_id(sender, message_id):
     """Save the last processed message_id to disk for a specific sender"""
@@ -130,7 +148,8 @@ end_messages_received = 0
 # Track END messages per client: {client_id: count}
 client_amount_counter = defaultdict(int)
 client_end_messages = defaultdict(int)
-last_message_per_sender = defaultdict(str)
+last_message_per_sender = defaultdict(list)
+duplicated_count = 0
 
 # Track routing keys used for categorizer_q3 per client
 client_q3_routing_keys = defaultdict(set)
@@ -195,7 +214,7 @@ def filter_message_by_hour(parsed_message, start_hour: int, end_hour: int) -> li
 def on_message_callback(message: bytes, delivery_tag=None, channel=None):
     global rows_received, rows_sent_to_amount, rows_sent_to_q3, end_messages_received, client_stats
     global filter_by_amount_exchange, categorizer_q3_topic_exchange, categorizer_q3_fanout_exchange
-    global client_amount_counter, client_end_messages, last_message_per_sender
+    global client_amount_counter, client_end_messages, last_message_per_sender, duplicated_count
     try:
         # print(f"[filter_by_hour] Worker {WORKER_INDEX} received a message!", flush=True)
         parsed_message = parse_message(message)
@@ -226,8 +245,11 @@ def on_message_callback(message: bytes, delivery_tag=None, channel=None):
         #     return
         
         # Check if this is a duplicate message from this sender (message we processed before restart)
-        if sender_id in last_message_per_sender and last_message_per_sender[sender_id] == message_id:
-            print(f"[filter_by_hour] Worker {WORKER_INDEX} DUPLICATE message detected from disk persistence for sender {sender_id}, message_id {message_id} - skipping (container restart recovery)", flush=True)
+        if sender_id in last_message_per_sender and message_id in last_message_per_sender[sender_id]:
+            print_warn(f"[filter_by_hour] Worker {WORKER_INDEX} DUPLICATE message detected from disk persistence for sender {sender_id}, message_id {message_id} - skipping (container restart recovery)")
+            
+            duplicated_count +=1
+            save_state_to_disk(client_amount_counter, client_end_messages, last_message_per_sender, duplicated_count)
             # ACK the duplicate message to avoid reprocessing
             if delivery_tag and channel:
                 channel.basic_ack(delivery_tag=delivery_tag)
@@ -363,9 +385,12 @@ def on_message_callback(message: bytes, delivery_tag=None, channel=None):
         #     save_last_processed_message_id(sender_id, message_id)
         #     print(f"[filter_by_hour] Worker {WORKER_INDEX} saved message_id to disk for sender {sender_id}: {message_id}", flush=True)
         
-        last_message_per_sender[sender_id] = message_id
+        last_message_per_sender[sender_id].append(message_id)
+        # last_message_per_sender[sender_id].insert(0, message_id)
+        # if len(last_message_per_sender[sender_id]) > 10:
+        #     last_message_per_sender[sender_id].pop()
 
-        save_state_to_disk(client_amount_counter, client_end_messages, last_message_per_sender)
+        save_state_to_disk(client_amount_counter, client_end_messages, last_message_per_sender, duplicated_count)
 
         # Manual ACK: Only acknowledge after successful processing and persistence
         if delivery_tag and channel:
@@ -403,8 +428,8 @@ def main():
     rows_sent_to_amount = 0
     rows_sent_to_q3 = 0
     
-    global client_amount_counter, client_end_messages, last_message_per_sender
-    client_amount_counter, client_end_messages, last_message_per_sender = recover_state()
+    global client_amount_counter, client_end_messages, last_message_per_sender, duplicated_count
+    client_amount_counter, client_end_messages, last_message_per_sender, duplicated_count = recover_state()
 
     print(f"[filter_by_hour] Worker {WORKER_INDEX} STARTING UP - Basic imports done", flush=True)
     print(f"[filter_by_hour] Worker {WORKER_INDEX} Environment: RECEIVER_EXCHANGE={RECEIVER_EXCHANGE}, START_HOUR={START_HOUR}, END_HOUR={END_HOUR}", flush=True)

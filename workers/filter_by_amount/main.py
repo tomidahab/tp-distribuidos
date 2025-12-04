@@ -120,7 +120,7 @@ def send_ack(sender_id, message_id):
     except Exception as e:
         print(f"[filter_by_amount] Worker {WORKER_INDEX} ERROR sending ACK for message {message_id}: {e}", flush=True)
 
-def on_message_callback(message: bytes, topic_middleware, should_stop, delivery_tag=None, channel=None):
+def on_message_callback(message: bytes, delivery_tag=None, channel=None):
     global rows_received, rows_sent, client_end_messages, completed_clients, client_stats
     
     try:
@@ -152,18 +152,18 @@ def on_message_callback(message: bytes, topic_middleware, should_stop, delivery_
                 channel.basic_ack(delivery_tag=delivery_tag)
             return
         
-        # Check if we're stopping AFTER parsing and duplicate detection  
-        if should_stop.is_set():  # Don't process if we're stopping
-            print(f"[filter_by_amount] Worker {WORKER_INDEX} should_stop detected, saving message_id and ACKing to prevent reprocessing", flush=True)
-            # Save message_id to prevent reprocessing after restart
-            if message_id:
-                on_message_callback._disk_last_message_id_by_sender[sender] = message_id
-                save_last_processed_message_id(sender, message_id)
-                print(f"[filter_by_amount] Worker {WORKER_INDEX} saved message_id during shutdown for sender {sender}: {message_id}", flush=True)
-            # ACK to avoid requeue since we've marked it as processed
-            if delivery_tag and channel:
-                channel.basic_ack(delivery_tag=delivery_tag)
-            return
+        # # Check if we're stopping AFTER parsing and duplicate detection  
+        # if should_stop.is_set():  # Don't process if we're stopping
+        #     print(f"[filter_by_amount] Worker {WORKER_INDEX} should_stop detected, saving message_id and ACKing to prevent reprocessing", flush=True)
+        #     # Save message_id to prevent reprocessing after restart
+        #     if message_id:
+        #         on_message_callback._disk_last_message_id_by_sender[sender] = message_id
+        #         save_last_processed_message_id(sender, message_id)
+        #         print(f"[filter_by_amount] Worker {WORKER_INDEX} saved message_id during shutdown for sender {sender}: {message_id}", flush=True)
+        #     # ACK to avoid requeue since we've marked it as processed
+        #     if delivery_tag and channel:
+        #         channel.basic_ack(delivery_tag=delivery_tag)
+        #     return
         
         # Process message - no in-memory duplicate check by client (removed to avoid conflicts)
         if message_id:
@@ -295,8 +295,8 @@ def main():
     
     try:        
         # Start consuming from topic exchange with manual ACK (blocking)
-        topic_callback = make_on_message_callback(topic_middleware, should_stop)
-        topic_middleware.start_consuming(topic_callback, auto_ack=False)
+        # topic_callback = make_on_message_callback(topic_middleware, should_stop)
+        topic_middleware.start_consuming(on_message_callback, auto_ack=True)
         
         print(f"[filter_by_amount] Worker {WORKER_INDEX} topic consuming finished", flush=True)
         

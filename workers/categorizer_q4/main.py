@@ -29,6 +29,21 @@ AUXILIARY_FILE = f"{PERSISTENCE_DIR}/categorizer_q4_worker_{WORKER_INDEX}_backup
 receiver_queue = None
 birthday_dict_queue = None
 
+def print_ok(msg: str):
+    GREEN = "\033[32m"
+    RESET = "\033[0m"
+    print(f"{GREEN}{msg}{RESET}", flush=True)
+
+def print_err(msg: str):
+    RED = "\033[31m"
+    RESET = "\033[0m"
+    print(f"{RED}{msg}{RESET}", flush=True)
+
+def print_warn(msg: str):
+    YELLOW = "\033[33m"
+    RESET = "\033[0m"
+    print(f"{YELLOW}{msg}{RESET}", flush=True)
+
 def _close_queue(queue):
     if queue:
         queue.close()
