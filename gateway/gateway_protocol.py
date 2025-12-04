@@ -99,18 +99,18 @@ def handle_and_forward_chunk(client_id: str, csv_type: int, is_last: int, chunk:
                 
         elif csv_type == CSV_TYPES_REVERSE["menu_items"]:  # menu_items
             print(f"[gateway_protocol] Forwarding menu_items to categorizer_q2_items_fanout_exchange")
-            message, _ = build_message(client_id, csv_type, is_last, rows)
-            for attempt in range(MAX_RETRIES):
-                try:
-                    categorizer_items_exchange.send(message)
-                    print(f"[gateway_protocol] Successfully sent menu_items to fanout exchange")
-                    break
-                except Exception as e:
-                    print(f"[gateway_protocol] Retry {attempt+1}/{MAX_RETRIES} for menu_items fanout exchange: {e}", file=sys.stderr)
-                    time.sleep(RETRY_DELAY)
-            else:
-                print(f"[gateway_protocol] Failed to connect to menu_items fanout exchange after {MAX_RETRIES} retries", file=sys.stderr)
-                return -1
+            # message, _ = build_message(client_id, csv_type, is_last, rows)
+            # for attempt in range(MAX_RETRIES):
+            #     try:
+            #         categorizer_items_exchange.send(message)
+            #         print(f"[gateway_protocol] Successfully sent menu_items to fanout exchange")
+            #         break
+            #     except Exception as e:
+            #         print(f"[gateway_protocol] Retry {attempt+1}/{MAX_RETRIES} for menu_items fanout exchange: {e}", file=sys.stderr)
+            #         time.sleep(RETRY_DELAY)
+            # else:
+            #     print(f"[gateway_protocol] Failed to connect to menu_items fanout exchange after {MAX_RETRIES} retries", file=sys.stderr)
+            #     return -1
         elif csv_type == CSV_TYPES_REVERSE["users"]:  # users
             q4_rows = []
             for row in rows:
