@@ -594,17 +594,17 @@ def main():
     
     # Start both consumer threads
     t1 = threading.Thread(target=consume_transactions)
-    # t2 = threading.Thread(target=consume_transaction_items)
+    t2 = threading.Thread(target=consume_transaction_items)
     
     print(f"[filter_by_year] Worker {WORKER_INDEX} Starting transactions thread...")
     t1.start()
     print(f"[filter_by_year] Worker {WORKER_INDEX} Starting transaction_items thread...")
-    # t2.start()
+    t2.start()
     
     print(f"[filter_by_year] Worker {WORKER_INDEX} All threads started, waiting for messages...")
     try:
         t1.join()
-        # t2.join()
+        t2.join()
     except KeyboardInterrupt:
         print(f"[filter_by_year] Worker {WORKER_INDEX} Stopping...")
         receiver_exchange_t.stop_consuming()
