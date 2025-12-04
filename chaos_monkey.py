@@ -32,9 +32,9 @@ class ChaosMonkey:
             'filter_by_amount_worker_',
             'filter_by_hour_worker_',
             'categorizer_q2_worker_',
-            # 'categorizer_q3_worker_',
-            # 'categorizer_q4_worker_',
-            # 'birthday_dictionary_worker_'
+            'categorizer_q3_worker_',
+            'categorizer_q4_worker_',
+            'birthday_dictionary_worker_'
         }
         
         # Track kills for statistics

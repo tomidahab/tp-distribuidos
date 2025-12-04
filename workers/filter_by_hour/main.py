@@ -4,6 +4,7 @@ import signal
 import time
 import sys
 import json
+import hashlib
 from collections import defaultdict
 
 from common.health_check_receiver import HealthCheckReceiver
@@ -84,7 +85,6 @@ client_stats = defaultdict(lambda: {
     'rows_sent_to_amount': 0,
     'rows_sent_to_q3': 0,
     'end_messages_received': 0,
-    'amount_worker_counter': 0  # Per-client counter for amount workers
 })
 
 topic_middleware = None
@@ -106,6 +106,22 @@ def get_semester_key(year, month):
     """Generate semester routing key based on year and month"""
     semester = 1 if 1 <= month <= 6 else 2
     return f"semester.{year}-{semester}"
+
+def get_message_hash(row, csv_type):
+    """Generate consistent hash for a row to determine worker routing"""
+    try:
+        dic_fields_row = row_to_dict(row, csv_type)
+        # Use transaction_id for transactions, or a combination of fields for other types
+        if csv_type == CSV_TYPES_REVERSE['transactions']:
+            hash_key = dic_fields_row.get('transaction_id', '')
+        else:
+            # For other types, use a combination of relevant fields
+            hash_key = str(dic_fields_row)
+        
+        return int(hashlib.md5(hash_key.encode()).hexdigest(), 16)
+    except Exception as e:
+        # Fallback to string hash if row parsing fails
+        return hash(str(row))
 
 def filter_message_by_hour(parsed_message, start_hour: int, end_hour: int) -> list:
     try:
@@ -138,25 +154,25 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
         parsed_message = parse_message(message)
         type_of_message = parsed_message['csv_type']  
         client_id = parsed_message['client_id']
-        is_last = int(parsed_message['is_last'])
+        is_last = parsed_message['is_last']
         
-        # Extract ACK information if available  
-        sender_id = parsed_message.get('sender', '')
+        # Extract message_id and sender for persistence
         message_id = parsed_message.get('message_id', '')
+        sender = parsed_message.get('sender', 'unknown')
         
         # Initialize disk persistence tracking per sender if needed
         if not hasattr(on_message_callback, '_disk_last_message_id_by_sender'):
             on_message_callback._disk_last_message_id_by_sender = {}
         
         # Load last processed message_id from disk for this sender if not loaded yet
-        if sender_id and sender_id not in on_message_callback._disk_last_message_id_by_sender:
-            disk_last_message_id = load_last_processed_message_id(sender_id)
-            on_message_callback._disk_last_message_id_by_sender[sender_id] = disk_last_message_id
-            print(f"[filter_by_hour] Worker {WORKER_INDEX} initialized disk persistence for sender {sender_id}", flush=True)
+        if sender not in on_message_callback._disk_last_message_id_by_sender:
+            disk_last_message_id = load_last_processed_message_id(sender)
+            on_message_callback._disk_last_message_id_by_sender[sender] = disk_last_message_id
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} initialized disk persistence for sender {sender}", flush=True)
         
         # Check if this is a duplicate message from this sender (message we processed before restart)
-        if message_id and sender_id and message_id == on_message_callback._disk_last_message_id_by_sender.get(sender_id):
-            print(f"[filter_by_hour] Worker {WORKER_INDEX} DUPLICATE message detected from disk persistence for sender {sender_id}, message_id {message_id} - skipping (container restart recovery)", flush=True)
+        if message_id and message_id == on_message_callback._disk_last_message_id_by_sender.get(sender):
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} DUPLICATE message detected from disk persistence for sender {sender}, message_id {message_id} - skipping (container restart recovery)", flush=True)
             # ACK the duplicate message to avoid reprocessing
             if delivery_tag and channel:
                 channel.basic_ack(delivery_tag=delivery_tag)
@@ -166,10 +182,10 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
         if should_stop.is_set():  # Don't process if we're stopping
             print(f"[filter_by_hour] Worker {WORKER_INDEX} should_stop detected, saving message_id and ACKing to prevent reprocessing", flush=True)
             # Save message_id to prevent reprocessing after restart
-            if message_id and sender_id:
-                on_message_callback._disk_last_message_id_by_sender[sender_id] = message_id
-                save_last_processed_message_id(sender_id, message_id)
-                print(f"[filter_by_hour] Worker {WORKER_INDEX} saved message_id during shutdown for sender {sender_id}: {message_id}", flush=True)
+            if message_id and sender:
+                on_message_callback._disk_last_message_id_by_sender[sender] = message_id
+                save_last_processed_message_id(sender, message_id)
+                print(f"[filter_by_hour] Worker {WORKER_INDEX} saved message_id during shutdown for sender {sender}: {message_id}", flush=True)
             # ACK to avoid requeue since we've marked it as processed
             if delivery_tag and channel:
                 channel.basic_ack(delivery_tag=delivery_tag)
@@ -177,14 +193,14 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
         
         # Process message - no in-memory duplicate check by client (removed to avoid conflicts)
         if message_id:
-            print(f"[filter_by_hour] Worker {WORKER_INDEX} processing message_id {message_id} for client {client_id} from sender {sender_id}", flush=True)
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} processing message_id {message_id} for client {client_id} from sender {sender}", flush=True)
         
         # Update client stats
         client_stats[client_id]['messages_received'] += 1
         client_stats[client_id]['rows_received'] += len(parsed_message['rows'])
         
         # Handle END message FIRST
-        if is_last == 1:
+        if is_last:
             client_stats[client_id]['end_messages_received'] += 1
             client_end_messages[client_id] += 1
             end_messages_received += 1  # Keep global counter for logging
@@ -195,10 +211,10 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
             print(f"[filter_by_hour] Worker {WORKER_INDEX} SKIPPING message from completed client {client_id} with {len(parsed_message['rows'])} rows, is_last={is_last}")
             
             # CRITICAL: Save message_id even when skipping to prevent reprocessing after restart
-            if message_id and sender_id:
-                on_message_callback._disk_last_message_id_by_sender[sender_id] = message_id
-                save_last_processed_message_id(sender_id, message_id)
-                print(f"[filter_by_hour] Worker {WORKER_INDEX} saved skipped message_id for sender {sender_id}: {message_id}", flush=True)
+            if message_id and sender:
+                on_message_callback._disk_last_message_id_by_sender[sender] = message_id
+                save_last_processed_message_id(sender, message_id)
+                print(f"[filter_by_hour] Worker {WORKER_INDEX} saved skipped message_id for sender {sender}: {message_id}", flush=True)
             
             # ACK the message even if skipping to avoid requeue
             if delivery_tag and channel:
@@ -216,29 +232,28 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
 
         #print(f"[filter_by_hour] Worker {WORKER_INDEX} client {client_id}: {len(filtered_rows)} rows passed hour filter (from {len(parsed_message['rows'])} input rows)")
 
-        if (len(filtered_rows) != 0) or (is_last == 1):
+        if (len(filtered_rows) != 0) or (is_last):
             # For Q1 - send to filter_by_amount exchange
             if type_of_message == CSV_TYPES_REVERSE['transactions']:  # transactions
                 # Route by transaction_id for load balancing
                 if filtered_rows:
                     client_stats[client_id]['rows_sent_to_amount'] += len(filtered_rows)
                     
-                    # Group rows by worker to send in batches using per-client counter
+                    # Group rows by worker to send in batches using hash-based distribution
                     rows_by_worker = defaultdict(list)
-                    for i, row in enumerate(filtered_rows):
-                        # Use per-client counter for deterministic distribution
-                        worker_index = (client_stats[client_id]['amount_worker_counter'] + i) % NUMBER_OF_AMOUNT_WORKERS
+                    for row in filtered_rows:
+                        # Use hash-based routing for consistent distribution
+                        row_hash = get_message_hash(row, type_of_message)
+                        worker_index = row_hash % NUMBER_OF_AMOUNT_WORKERS
                         routing_key = f"transaction.{worker_index}"
                         rows_by_worker[routing_key].append(row)
-                    
-                    # Update per-client counter (DON'T mod here, just increment)
-                    client_stats[client_id]['amount_worker_counter'] += len(filtered_rows)
                     
                     # Send batched messages to each worker
                     for routing_key, worker_rows in rows_by_worker.items():
                         if worker_rows:
                             outgoing_sender = f"filter_by_hour_worker_{WORKER_INDEX}"
-                            new_message, _ = build_message(client_id, type_of_message, 0, worker_rows, sender=outgoing_sender)
+                            # CRITICAL: Pass message_id for persistence in downstream workers
+                            new_message, _ = build_message(client_id, type_of_message, 0, worker_rows, message_id=message_id, sender=outgoing_sender)
                             filter_by_amount_exchange.send(new_message, routing_key=routing_key)
                             rows_sent_to_amount += len(worker_rows)
                             #print(f"[filter_by_hour] Worker {WORKER_INDEX} client {client_id}: Sent {len(worker_rows)} rows to filter_by_amount {routing_key} (total sent to amount: {client_stats[client_id]['rows_sent_to_amount']}, counter at: {client_stats[client_id]['amount_worker_counter']})")
@@ -264,7 +279,8 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
                     # Send grouped messages by semester
                     for semester_key, semester_rows in rows_by_semester.items():
                         if semester_rows:
-                            semester_message, _ = build_message(client_id, type_of_message, 0, semester_rows, sender=f"filter_by_hour_worker_{WORKER_INDEX}")
+                            # CRITICAL: Pass message_id for persistence
+                            semester_message, _ = build_message(client_id, type_of_message, 0, semester_rows, message_id=message_id, sender=f"filter_by_hour_worker_{WORKER_INDEX}")
                             # Use the semester_key as routing key so messages reach the correct topic subscribers
                             categorizer_q3_topic_exchange.send(semester_message, routing_key=semester_key)
                             rows_sent_to_q3 += len(semester_rows)
@@ -275,7 +291,7 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
                 #print(f"[filter_by_hour] Worker {WORKER_INDEX} unknown csv_type: {type_of_message}", file=sys.stderr)
 
         # Check if this client has received all END messages and complete processing
-        if is_last == 1 and client_end_messages[client_id] >= NUMBER_OF_YEAR_WORKERS:
+        if is_last and client_end_messages[client_id] >= NUMBER_OF_YEAR_WORKERS:
             if client_id not in completed_clients:
                 print(f"[filter_by_hour] Worker {WORKER_INDEX} client {client_id} received all END messages from filter_by_year workers. Sending END messages...", flush=True)
                 completed_clients.add(client_id)
@@ -285,14 +301,16 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
                 try:
                     # Send END to filter_by_amount (to all workers) for this specific client
                     outgoing_sender = f"filter_by_hour_worker_{WORKER_INDEX}"
-                    end_message, _ = build_message(client_id, type_of_message, 1, [], sender=outgoing_sender)
+                    # CRITICAL: Pass message_id for persistence in downstream workers
+                    end_message, _ = build_message(client_id, type_of_message, 1, [], message_id=message_id, sender=outgoing_sender)
                     for i in range(NUMBER_OF_AMOUNT_WORKERS):
                         routing_key = f"transaction.{i}"
                         filter_by_amount_exchange.send(end_message, routing_key=routing_key)
                         print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message for client {client_id} to filter_by_amount worker {i} via topic exchange", flush=True)
                     # Send END to categorizer_q3 topic exchange for all routing keys used for this client
                     for routing_key in client_q3_routing_keys[client_id]:
-                        end_message_q3, _ = build_message(client_id, type_of_message, 1, [], sender=outgoing_sender)
+                        # CRITICAL: Pass message_id for persistence
+                        end_message_q3, _ = build_message(client_id, type_of_message, 1, [], message_id=message_id, sender=outgoing_sender)
                         categorizer_q3_topic_exchange.send(end_message_q3, routing_key=routing_key)
                         print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message for client {client_id} to categorizer_q3 topic exchange with routing key {routing_key}", flush=True)
                 except Exception as e:
@@ -301,15 +319,15 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
                     traceback.print_exc()
         
         # CRITICAL: Save message_id to disk AFTER successful message sending to prevent message loss
-        if message_id and sender_id:
-            on_message_callback._disk_last_message_id_by_sender[sender_id] = message_id
-            save_last_processed_message_id(sender_id, message_id)
-            print(f"[filter_by_hour] Worker {WORKER_INDEX} saved message_id to disk for sender {sender_id}: {message_id}", flush=True)
+        if message_id and sender:
+            on_message_callback._disk_last_message_id_by_sender[sender] = message_id
+            save_last_processed_message_id(sender, message_id)
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} saved message_id to disk for sender {sender}: {message_id}", flush=True)
         
         # Manual ACK: Only acknowledge after successful processing and persistence
         if delivery_tag and channel:
             channel.basic_ack(delivery_tag=delivery_tag)
-            print(f"[filter_by_hour] Worker {WORKER_INDEX} ACK sent for message from client {client_id}, sender {sender_id}", flush=True)
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} ACK sent for message from client {client_id}, sender {sender}", flush=True)
             
     except Exception as e:
         print(f"[filter_by_hour] Worker {WORKER_INDEX} ERROR processing message: {e}", flush=True)
