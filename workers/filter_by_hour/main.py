@@ -356,7 +356,8 @@ def on_message_callback(message: bytes, delivery_tag=None, channel=None):
 
         # Check if this client has received all END messages and complete processing
         if is_last == 1 and client_end_messages[client_id] >= NUMBER_OF_YEAR_WORKERS:
-            del client_amount_counter[client_id]
+            if client_id in client_amount_counter:
+                del client_amount_counter[client_id]
             del client_end_messages[client_id]
             print(f"[filter_by_hour] Worker {WORKER_INDEX} client {client_id} received all END messages from filter_by_year workers. Sending END messages...", flush=True)
             # Print summary stats for this client

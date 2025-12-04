@@ -50,19 +50,19 @@ services:
     volumes:
       - ./data/input:/data/input
 
-  # client_2:
-  #   build:
-  #     context: .
-  #     dockerfile: client/Dockerfile
-  #   container_name: client_2
-  #   environment:
-  #     - CLIENT_ID=client_2
-  #   networks:
-  #     - tpg_net
-  #   depends_on:
-  #     - gateway
-  #   volumes:
-  #     - ./data/input:/data/input
+  client_2:
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+    container_name: client_2
+    environment:
+      - CLIENT_ID=client_2
+    networks:
+      - tpg_net
+    depends_on:
+      - gateway
+    volumes:
+      - ./data/input:/data/input
 
   filter_by_year_worker_0:
     build:

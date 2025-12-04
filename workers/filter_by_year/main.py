@@ -272,13 +272,15 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
                     # worker_index = (on_message_callback_transactions._hour_worker_counter + i) % NUMBER_OF_HOUR_WORKERS
                     # worker_index = (on_message_callback_transactions._hour_worker_counter[client_id] + i) % NUMBER_OF_HOUR_WORKERS
                     # worker_index = (uuid.UUID(message_id.split("_")[0]).int + i) % NUMBER_OF_HOUR_WORKERS
-                    worker_index = WORKER_INDEX % NUMBER_OF_HOUR_WORKERS
+                    # worker_index = int(client_id.split("_")[1]) % NUMBER_OF_HOUR_WORKERS #.
+                    worker_index = on_message_callback_transactions._hour_worker_counter[client_id] % NUMBER_OF_HOUR_WORKERS #.
+                    # worker_index = WORKER_INDEX % NUMBER_OF_HOUR_WORKERS
                     routing_key = f"hour.{worker_index}"
                     rows_by_worker[routing_key].append(row)
                 
                 # Update per-client counter (DON'T mod here, just increment)
                 # client_stats[client_id]['hour_worker_counter'] += len(new_rows)
-                on_message_callback_transactions._hour_worker_counter[client_id] += len(new_rows)
+                on_message_callback_transactions._hour_worker_counter[client_id] += 1
                 # Update stats
                 client_stats[client_id]['transactions_rows_sent_to_hour'] += len(new_rows)
                 
