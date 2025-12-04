@@ -1,3 +1,4 @@
+import hashlib
 import os
 import signal
 import sys
@@ -34,9 +35,16 @@ CATEGORIZER_Q4_WORKERS = int(os.environ.get('CATEGORIZER_Q4_WORKERS', 3))
 # File to persist processed message_ids per sender
 PERSISTENCE_DIR = "/app/persistence"
 
+BACKUP_FILE = f"{PERSISTENCE_DIR}/filter_by_year_worker_transactions_{WORKER_INDEX}_backup.txt"
+AUXILIARY_FILE = f"{PERSISTENCE_DIR}/filter_by_year_worker_transactions_{WORKER_INDEX}_backup.tmp"
+
 def get_persistence_file(sender, message_type):
     """Get the persistence file path for a specific sender and message type"""
     return f"{PERSISTENCE_DIR}/worker_{WORKER_INDEX}_last_message_sender_{sender}_type_{message_type}.txt"
+
+def get_aux_persistence_file(sender, message_type):
+    """Get the persistence file path for a specific sender and message type"""
+    return f"{PERSISTENCE_DIR}/worker_{WORKER_INDEX}_last_message_sender_{sender}_type_{message_type}.tmp"
 
 def load_last_processed_message_id(sender, message_type):
     """Load the last processed message_id from disk for a specific sender and message type"""
@@ -44,9 +52,10 @@ def load_last_processed_message_id(sender, message_type):
         persistence_file = get_persistence_file(sender, message_type)
         if os.path.exists(persistence_file):
             with open(persistence_file, 'r') as f:
-                message_id = f.read().strip()
+                message_id = f.read().strip().split(";")[0]
+                hour_worker_counter = int(f.read().strip().split(";")[1])
                 print(f"[filter_by_year] Worker {WORKER_INDEX} loaded last message_id for sender {sender} type {message_type}: {message_id}", flush=True)
-                return message_id
+                return message_id, hour_worker_counter
         else:
             print(f"[filter_by_year] Worker {WORKER_INDEX} no persistence file found for sender {sender} type {message_type}, starting fresh", flush=True)
             return None
@@ -54,18 +63,81 @@ def load_last_processed_message_id(sender, message_type):
         print(f"[filter_by_year] Worker {WORKER_INDEX} ERROR loading persistence for sender {sender} type {message_type}: {e}", flush=True)
         return None
 
-def save_last_processed_message_id(sender, message_id, message_type):
+def save_last_processed_message_id(sender, message_id, hour_worker_counter, message_type):
     """Save the last processed message_id to disk for a specific sender and message type"""
     try:
         # Create persistence directory if it doesn't exist
         os.makedirs(PERSISTENCE_DIR, exist_ok=True)
         
+        # serializable_data = {
+        #     "client_amount_counter": dict(client_amount_counter),
+        #     "client_end_messages": dict(client_end_messages),
+        #     "last_message_per_sender": dict(last_message_per_sender),
+        # }
+        
+        # with open(AUXILIARY_FILE, "w") as aux_file:
+        #     json.dump(serializable_data, aux_file)  # Write JSON data
+        #     aux_file.write("\n")  # Add a newline to separate JSON from messages
+        # os.rename(AUXILIARY_FILE, BACKUP_FILE) # Atomic
+
+        aux_file = get_aux_persistence_file(sender, message_type)
         persistence_file = get_persistence_file(sender, message_type)
-        with open(persistence_file, 'w') as f:
+        with open(aux_file, 'w') as f:
             f.write(message_id)
+            f.write(";")
+            f.write(str(hour_worker_counter))
+        os.rename(aux_file, persistence_file) # Atomic
         print(f"[filter_by_year] Worker {WORKER_INDEX} saved message_id to disk for sender {sender} type {message_type}: {message_id}", flush=True)
     except Exception as e:
         print(f"[filter_by_year] Worker {WORKER_INDEX} ERROR saving persistence for sender {sender} type {message_type}: {e}", flush=True)
+
+def save_transactions_state_to_disk(transaction_last_message, client_hour_counter):
+    try:
+        os.makedirs(PERSISTENCE_DIR, exist_ok=True)
+
+        serializable_data = {
+            "transaction_last_message": transaction_last_message,
+            "client_hour_counter": dict(client_hour_counter),
+        }
+        
+        with open(AUXILIARY_FILE, "w") as aux_file:
+            json.dump(serializable_data, aux_file)  # Write JSON data
+            aux_file.write("\n")  # Add a newline to separate JSON from messages
+        os.rename(AUXILIARY_FILE, BACKUP_FILE) # Atomic
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} saved state to {BACKUP_FILE} atomically")
+    except Exception as e:
+        print(f"[filter_by_hour] ERROR saving state to disk: {e}", file=sys.stderr)
+
+def recover_transactions_state():
+    transaction_last_message = ""
+    client_hour_counter = defaultdict(int)
+
+    # Check if the auxiliary file exists
+    if os.path.exists(AUXILIARY_FILE):
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} detected auxiliary file {AUXILIARY_FILE}, discarding it")
+        os.remove(AUXILIARY_FILE)  # Discard the auxiliary file
+
+    if not os.path.exists(BACKUP_FILE):
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} no backup file found, starting fresh")
+        return transaction_last_message, client_hour_counter
+
+    try:
+        with open(BACKUP_FILE, "r") as backup_file:
+            lines = backup_file.readlines()
+            try:
+                data = json.loads(lines[0])
+                transaction_last_message = data["transaction_last_message"]
+                client_hour_counter = defaultdict(int, data["client_hour_counter"])
+
+                print(f"[filter_by_hour] Successfully recovered state from JSON in {BACKUP_FILE}")
+            except json.JSONDecodeError as e:
+                print(f"[filter_by_hour] ERROR parsing JSON from backup file: {e}", file=sys.stderr)
+                return transaction_last_message, client_hour_counter
+
+    except Exception as e:
+        print(f"[filter_by_hour] ERROR recovering state from {BACKUP_FILE}: {e}", file=sys.stderr)
+
+    return transaction_last_message, client_hour_counter
 
 receiver_exchange_t = None
 receiver_exchange_t_items = None
@@ -128,11 +200,14 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
         # Initialize disk persistence tracking per sender if needed
         if not hasattr(on_message_callback_transactions, '_disk_last_message_id_by_sender'):
             on_message_callback_transactions._disk_last_message_id_by_sender = {}
+            on_message_callback_transactions._hour_worker_counter = {}
         
         # Load last processed message_id from disk for this sender if not loaded yet
         if sender_id and sender_id not in on_message_callback_transactions._disk_last_message_id_by_sender:
-            disk_last_message_id = load_last_processed_message_id(sender_id, "transactions")
-            on_message_callback_transactions._disk_last_message_id_by_sender[sender_id] = disk_last_message_id
+            # loaded = load_last_processed_message_id(sender_id, "transactions")
+            transaction_last_message, client_hour_counter = recover_transactions_state()
+            on_message_callback_transactions._disk_last_message_id_by_sender[sender_id] = transaction_last_message
+            on_message_callback_transactions._hour_worker_counter = client_hour_counter
             print(f"[filter_by_year] Worker {WORKER_INDEX} initialized disk persistence for sender {sender_id} type transactions", flush=True)
         
         # Check if this is a duplicate message from this sender (message we processed before restart)
@@ -173,13 +248,15 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
                 rows_by_worker = defaultdict(list)
                 for i, row in enumerate(new_rows):
                     # Use per-client counter for deterministic distribution
-                    worker_index = (client_stats[client_id]['hour_worker_counter'] + i) % NUMBER_OF_HOUR_WORKERS
+                    # worker_index = (client_stats[client_id]['hour_worker_counter'] + i) % NUMBER_OF_HOUR_WORKERS
+                    # worker_index = (on_message_callback_transactions._hour_worker_counter + i) % NUMBER_OF_HOUR_WORKERS
+                    worker_index = (on_message_callback_transactions._hour_worker_counter[client_id] + i) % NUMBER_OF_HOUR_WORKERS
                     routing_key = f"hour.{worker_index}"
                     rows_by_worker[routing_key].append(row)
                 
                 # Update per-client counter (DON'T mod here, just increment)
-                client_stats[client_id]['hour_worker_counter'] += len(new_rows)
-                
+                # client_stats[client_id]['hour_worker_counter'] += len(new_rows)
+                on_message_callback_transactions._hour_worker_counter[client_id] += len(new_rows)
                 # Update stats
                 client_stats[client_id]['transactions_rows_sent_to_hour'] += len(new_rows)
                 
@@ -240,7 +317,8 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
         # Update in-memory tracking
         on_message_callback_transactions._disk_last_message_id_by_sender[sender_id] = message_id
         # Save to disk for persistence across restarts
-        save_last_processed_message_id(sender_id, message_id, "transactions")
+        # save_last_processed_message_id(sender_id, message_id, on_message_callback_transactions._hour_worker_counter, "transactions")
+        save_transactions_state_to_disk(message_id, on_message_callback_transactions._hour_worker_counter)
         print(f"[filter_by_year] Worker {WORKER_INDEX} saved message_id to disk for sender {sender_id} type transactions: {message_id}", flush=True)
     
     # Manual ACK: Only acknowledge after successful processing and persistence
@@ -266,9 +344,10 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
         
         # Load last processed message_id from disk for this sender if not loaded yet
         if sender_id and sender_id not in on_message_callback_t_items._disk_last_message_id_by_sender:
-            disk_last_message_id = load_last_processed_message_id(sender_id, "transaction_items")
-            on_message_callback_t_items._disk_last_message_id_by_sender[sender_id] = disk_last_message_id
-            print(f"[filter_by_year] Worker {WORKER_INDEX} initialized disk persistence for T_ITEMS sender {sender_id}", flush=True)
+            loaded = load_last_processed_message_id(sender_id, "transaction_items")
+            if loaded:
+                on_message_callback_t_items._disk_last_message_id_by_sender[sender_id] = loaded[0]
+                print(f"[filter_by_year] Worker {WORKER_INDEX} initialized disk persistence for T_ITEMS sender {sender_id}", flush=True)
         
         # Check if this is a duplicate message from this sender (message we processed before restart)
         if message_id and sender_id and message_id == on_message_callback_t_items._disk_last_message_id_by_sender.get(sender_id):
@@ -333,7 +412,7 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
         # Update in-memory tracking
         on_message_callback_t_items._disk_last_message_id_by_sender[sender_id] = message_id
         # Save to disk for persistence across restarts  
-        save_last_processed_message_id(sender_id, message_id, "transaction_items")
+        save_last_processed_message_id(sender_id, message_id, 0, "transaction_items")
         print(f"[filter_by_year] Worker {WORKER_INDEX} saved message_id to disk for sender {sender_id} type transaction_items: {message_id}", flush=True)
 
     # Manual ACK
@@ -358,7 +437,7 @@ def main():
     health_check_receiver = HealthCheckReceiver()
     health_check_receiver.start()
 
-    print(f"[filter_by_year] Worker {WORKER_INDEX} starting...")
+    print(f"\n\n\n\n\n[filter_by_year] Worker {WORKER_INDEX} starting...")
     contents = os.listdir(PERSISTENCE_DIR)
     if not contents:
         sleep(config.MIDDLEWARE_UP_TIME)  
@@ -442,7 +521,7 @@ def main():
         nonlocal transactions_end_received
         print(f"[filter_by_year] Worker {WORKER_INDEX} Starting transactions consumer...")
         
-        def wrapper(body, delivery_tag, channel):
+        def wrapper(body, delivery_tag = None, channel = None):
             nonlocal transactions_end_received
             try:
                 # Parse to check END flag for logging
@@ -459,7 +538,7 @@ def main():
                 print(f"[filter_by_year] Worker {WORKER_INDEX} Error in transactions callback: {e}", file=sys.stderr)
 
         try:
-            receiver_exchange_t.start_consuming(wrapper, auto_ack=False)
+            receiver_exchange_t.start_consuming(wrapper, auto_ack=True)
         except Exception as e:
             print(f"[filter_by_year] Worker {WORKER_INDEX} Error consuming transactions: {e}", file=sys.stderr)
     

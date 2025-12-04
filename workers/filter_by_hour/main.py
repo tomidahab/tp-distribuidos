@@ -26,10 +26,16 @@ SEMESTER_KEYS_FOR_FANOUT = ['semester.2023-1', 'semester.2024-1', 'semester.2024
 
 # File to persist processed message_ids per sender
 PERSISTENCE_DIR = "/app/persistence"
+BACKUP_FILE = f"{PERSISTENCE_DIR}/filter_by_hour_worker_{WORKER_INDEX}_backup.txt"
+AUXILIARY_FILE = f"{PERSISTENCE_DIR}/filter_by_hour_worker_{WORKER_INDEX}_backup.tmp"
 
 def get_persistence_file(sender):
     """Get the persistence file path for a specific sender"""
     return f"{PERSISTENCE_DIR}/worker_{WORKER_INDEX}_last_message_sender_{sender}.txt"
+
+def get_aux_persistence_file(sender):
+    """Get the persistence file path for a specific sender"""
+    return f"{PERSISTENCE_DIR}/worker_{WORKER_INDEX}_last_message_sender_{sender}.tmp"
 
 def load_last_processed_message_id(sender):
     """Load the last processed message_id from disk for a specific sender"""
@@ -47,15 +53,71 @@ def load_last_processed_message_id(sender):
         print(f"[filter_by_hour] Worker {WORKER_INDEX} ERROR loading persistence for sender {sender}: {e}", flush=True)
         return None
 
+def save_state_to_disk(client_amount_counter, client_end_messages, last_message_per_sender):
+    try:
+        os.makedirs(PERSISTENCE_DIR, exist_ok=True)
+
+        serializable_data = {
+            "client_amount_counter": dict(client_amount_counter),
+            "client_end_messages": dict(client_end_messages),
+            "last_message_per_sender": dict(last_message_per_sender),
+        }
+        
+        with open(AUXILIARY_FILE, "w") as aux_file:
+            json.dump(serializable_data, aux_file)  # Write JSON data
+            aux_file.write("\n")  # Add a newline to separate JSON from messages
+        os.rename(AUXILIARY_FILE, BACKUP_FILE) # Atomic
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} saved state to {BACKUP_FILE} atomically")
+    except Exception as e:
+        print(f"[filter_by_hour] ERROR saving state to disk: {e}", file=sys.stderr)
+
+def recover_state():
+    client_amount_counter = defaultdict(int)
+    client_end_messages = defaultdict(int)
+    last_message_per_sender = defaultdict(str)
+
+    # Check if the auxiliary file exists
+    if os.path.exists(AUXILIARY_FILE):
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} detected auxiliary file {AUXILIARY_FILE}, discarding it")
+        os.remove(AUXILIARY_FILE)  # Discard the auxiliary file
+
+    if not os.path.exists(BACKUP_FILE):
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} no backup file found, starting fresh")
+        return client_amount_counter, client_end_messages, last_message_per_sender
+
+    try:
+        with open(BACKUP_FILE, "r") as backup_file:
+            lines = backup_file.readlines()
+            try:
+                data = json.loads(lines[0])
+                # Restore client_store_user_counter
+                client_amount_counter = defaultdict(int, data["client_amount_counter"])
+                # Restore end message per client
+                client_end_messages = defaultdict(int, data["client_end_messages"])
+                # Restore last message IDs
+                last_message_per_sender = defaultdict(str, data["last_message_per_sender"])
+
+                print(f"[filter_by_hour] Successfully recovered state from JSON in {BACKUP_FILE}")
+            except json.JSONDecodeError as e:
+                print(f"[filter_by_hour] ERROR parsing JSON from backup file: {e}", file=sys.stderr)
+                return client_amount_counter, client_end_messages, last_message_per_sender
+
+    except Exception as e:
+        print(f"[filter_by_hour] ERROR recovering state from {BACKUP_FILE}: {e}", file=sys.stderr)
+
+    return client_amount_counter, client_end_messages, last_message_per_sender
+
 def save_last_processed_message_id(sender, message_id):
     """Save the last processed message_id to disk for a specific sender"""
     try:
         # Create persistence directory if it doesn't exist
         os.makedirs(PERSISTENCE_DIR, exist_ok=True)
         
-        persistence_file = get_persistence_file(sender)
-        with open(persistence_file, 'w') as f:
+        aux_file = get_aux_persistence_file(sender)
+        backup_file = get_persistence_file(sender)
+        with open(aux_file, 'w') as f:
             f.write(message_id)
+        os.rename(aux_file, backup_file) # Atomic
         print(f"[filter_by_hour] Worker {WORKER_INDEX} saved message_id to disk for sender {sender}: {message_id}", flush=True)
     except Exception as e:
         print(f"[filter_by_hour] Worker {WORKER_INDEX} ERROR saving persistence for sender {sender}: {e}", flush=True)
@@ -66,8 +128,9 @@ rows_sent_to_amount = 0
 rows_sent_to_q3 = 0
 end_messages_received = 0
 # Track END messages per client: {client_id: count}
+client_amount_counter = defaultdict(int)
 client_end_messages = defaultdict(int)
-completed_clients = set()
+last_message_per_sender = defaultdict(str)
 
 # Track routing keys used for categorizer_q3 per client
 client_q3_routing_keys = defaultdict(set)
@@ -79,10 +142,10 @@ categorizer_q3_fanout_exchange = None
 
 # Track detailed stats per client
 client_stats = defaultdict(lambda: {
-    'messages_received': 0,
-    'rows_received': 0,
-    'rows_sent_to_amount': 0,
-    'rows_sent_to_q3': 0,
+    'messages_received': 0, # X
+    'rows_received': 0, # X
+    'rows_sent_to_amount': 0, # X
+    'rows_sent_to_q3': 0, # X
     'end_messages_received': 0,
     'amount_worker_counter': 0  # Per-client counter for amount workers
 })
@@ -129,10 +192,10 @@ def filter_message_by_hour(parsed_message, start_hour: int, end_hour: int) -> li
         print(f"[filter] Error parsing message: {e}", file=sys.stderr)
         return []
 
-def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=None):
-    global rows_received, rows_sent_to_amount, rows_sent_to_q3, end_messages_received, client_end_messages, completed_clients, client_stats
+def on_message_callback(message: bytes, delivery_tag=None, channel=None):
+    global rows_received, rows_sent_to_amount, rows_sent_to_q3, end_messages_received, client_stats
     global filter_by_amount_exchange, categorizer_q3_topic_exchange, categorizer_q3_fanout_exchange
-    
+    global client_amount_counter, client_end_messages, last_message_per_sender
     try:
         # print(f"[filter_by_hour] Worker {WORKER_INDEX} received a message!", flush=True)
         parsed_message = parse_message(message)
@@ -144,35 +207,44 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
         sender_id = parsed_message.get('sender', '')
         message_id = parsed_message.get('message_id', '')
         
-        # Initialize disk persistence tracking per sender if needed
-        if not hasattr(on_message_callback, '_disk_last_message_id_by_sender'):
-            on_message_callback._disk_last_message_id_by_sender = {}
+        # # Initialize disk persistence tracking per sender if needed
+        # if not hasattr(on_message_callback, '_disk_last_message_id_by_sender'):
+        #     on_message_callback._disk_last_message_id_by_sender = {}
         
-        # Load last processed message_id from disk for this sender if not loaded yet
-        if sender_id and sender_id not in on_message_callback._disk_last_message_id_by_sender:
-            disk_last_message_id = load_last_processed_message_id(sender_id)
-            on_message_callback._disk_last_message_id_by_sender[sender_id] = disk_last_message_id
-            print(f"[filter_by_hour] Worker {WORKER_INDEX} initialized disk persistence for sender {sender_id}", flush=True)
+        # # Load last processed message_id from disk for this sender if not loaded yet
+        # if sender_id and sender_id not in on_message_callback._disk_last_message_id_by_sender:
+        #     disk_last_message_id = load_last_processed_message_id(sender_id)
+        #     on_message_callback._disk_last_message_id_by_sender[sender_id] = disk_last_message_id
+        #     print(f"[filter_by_hour] Worker {WORKER_INDEX} initialized disk persistence for sender {sender_id}", flush=True)
+        
+        # # Check if this is a duplicate message from this sender (message we processed before restart)
+        # if message_id and sender_id and message_id == on_message_callback._disk_last_message_id_by_sender.get(sender_id):
+        #     print(f"[filter_by_hour] Worker {WORKER_INDEX} DUPLICATE message detected from disk persistence for sender {sender_id}, message_id {message_id} - skipping (container restart recovery)", flush=True)
+        #     # ACK the duplicate message to avoid reprocessing
+        #     if delivery_tag and channel:
+        #         channel.basic_ack(delivery_tag=delivery_tag)
+        #     return
         
         # Check if this is a duplicate message from this sender (message we processed before restart)
-        if message_id and sender_id and message_id == on_message_callback._disk_last_message_id_by_sender.get(sender_id):
+        if sender_id in last_message_per_sender and last_message_per_sender[sender_id] == message_id:
             print(f"[filter_by_hour] Worker {WORKER_INDEX} DUPLICATE message detected from disk persistence for sender {sender_id}, message_id {message_id} - skipping (container restart recovery)", flush=True)
             # ACK the duplicate message to avoid reprocessing
             if delivery_tag and channel:
                 channel.basic_ack(delivery_tag=delivery_tag)
             return
-        
+
+        # NOTE: This hsould not happen, do not use keyboard
         # Check if we're stopping AFTER parsing and duplicate detection
-        if should_stop.is_set():  # Don't process if we're stopping
-            print(f"[filter_by_hour] Worker {WORKER_INDEX} should_stop detected, saving message_id and ACKing to prevent reprocessing", flush=True)
-            # Save message_id to prevent reprocessing after restart
-            if message_id and sender_id:
-                save_last_processed_message_id(sender_id, message_id)
-                print(f"[filter_by_hour] Worker {WORKER_INDEX} saved message_id during shutdown for sender {sender_id}: {message_id}", flush=True)
-            # ACK to avoid requeue since we've marked it as processed
-            if delivery_tag and channel:
-                channel.basic_ack(delivery_tag=delivery_tag)
-            return
+        # if should_stop.is_set():  # Don't process if we're stopping
+        #     print(f"[filter_by_hour] Worker {WORKER_INDEX} should_stop detected, saving message_id and ACKing to prevent reprocessing", flush=True)
+        #     # Save message_id to prevent reprocessing after restart
+        #     if message_id and sender_id:
+        #         save_last_processed_message_id(sender_id, message_id)
+        #         print(f"[filter_by_hour] Worker {WORKER_INDEX} saved message_id during shutdown for sender {sender_id}: {message_id}", flush=True)
+        #     # ACK to avoid requeue since we've marked it as processed
+        #     if delivery_tag and channel:
+        #         channel.basic_ack(delivery_tag=delivery_tag)
+        #     return
         
         # Process message - no in-memory duplicate check by client (removed to avoid conflicts)
         if message_id:
@@ -188,20 +260,6 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
             client_end_messages[client_id] += 1
             end_messages_received += 1  # Keep global counter for logging
             print(f"[filter_by_hour] Worker {WORKER_INDEX} received END message {client_end_messages[client_id]}/{NUMBER_OF_YEAR_WORKERS} for client {client_id} (total END messages: {end_messages_received})", flush=True)
-        
-        # Skip if client already completed - check AFTER processing END message
-        if client_id in completed_clients:
-            print(f"[filter_by_hour] Worker {WORKER_INDEX} SKIPPING message from completed client {client_id} with {len(parsed_message['rows'])} rows, is_last={is_last}")
-            
-            # CRITICAL: Save message_id even when skipping to prevent reprocessing after restart
-            if message_id and sender_id:
-                save_last_processed_message_id(sender_id, message_id)
-                print(f"[filter_by_hour] Worker {WORKER_INDEX} saved skipped message_id for sender {sender_id}: {message_id}", flush=True)
-            
-            # ACK the message even if skipping to avoid requeue
-            if delivery_tag and channel:
-                channel.basic_ack(delivery_tag=delivery_tag)
-            return
         
         #print(f"[filter_by_hour] Worker {WORKER_INDEX} received message from client {client_id} with {len(parsed_message['rows'])} rows, is_last={is_last} (total msgs: {client_stats[client_id]['messages_received']}, total rows: {client_stats[client_id]['rows_received']})")
         
@@ -225,13 +283,15 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
                     rows_by_worker = defaultdict(list)
                     for i, row in enumerate(filtered_rows):
                         # Use per-client counter for deterministic distribution
-                        worker_index = (client_stats[client_id]['amount_worker_counter'] + i) % NUMBER_OF_AMOUNT_WORKERS
+                        # worker_index = (client_stats[client_id]['amount_worker_counter'] + i) % NUMBER_OF_AMOUNT_WORKERS
+                        worker_index = (client_amount_counter[client_id] + i) % NUMBER_OF_AMOUNT_WORKERS
                         routing_key = f"transaction.{worker_index}"
                         rows_by_worker[routing_key].append(row)
                     
                     # Update per-client counter (DON'T mod here, just increment)
-                    client_stats[client_id]['amount_worker_counter'] += len(filtered_rows)
-                    
+                    # client_stats[client_id]['amount_worker_counter'] += len(filtered_rows)
+                    client_amount_counter[client_id] += len(filtered_rows)
+
                     # Send batched messages to each worker
                     for routing_key, worker_rows in rows_by_worker.items():
                         if worker_rows:
@@ -274,35 +334,39 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
 
         # Check if this client has received all END messages and complete processing
         if is_last == 1 and client_end_messages[client_id] >= NUMBER_OF_YEAR_WORKERS:
-            if client_id not in completed_clients:
-                print(f"[filter_by_hour] Worker {WORKER_INDEX} client {client_id} received all END messages from filter_by_year workers. Sending END messages...", flush=True)
-                completed_clients.add(client_id)
-                # Print summary stats for this client
-                stats = client_stats[client_id]
-                print(f"[filter_by_hour] Worker {WORKER_INDEX} SUMMARY for client {client_id}: messages_received={stats['messages_received']}, rows_received={stats['rows_received']}, rows_sent_to_amount={stats['rows_sent_to_amount']}, rows_sent_to_q3={stats['rows_sent_to_q3']}" )
-                try:
-                    # Send END to filter_by_amount (to all workers) for this specific client
-                    outgoing_sender = f"filter_by_hour_worker_{WORKER_INDEX}"
-                    end_message, _ = build_message(client_id, type_of_message, 1, [], sender=outgoing_sender)
-                    for i in range(NUMBER_OF_AMOUNT_WORKERS):
-                        routing_key = f"transaction.{i}"
-                        filter_by_amount_exchange.send(end_message, routing_key=routing_key)
-                        print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message for client {client_id} to filter_by_amount worker {i} via topic exchange", flush=True)
-                    # Send END to categorizer_q3 topic exchange for all routing keys used for this client
-                    for routing_key in client_q3_routing_keys[client_id]:
-                        end_message_q3, _ = build_message(client_id, type_of_message, 1, [], sender=outgoing_sender)
-                        categorizer_q3_topic_exchange.send(end_message_q3, routing_key=routing_key)
-                        print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message for client {client_id} to categorizer_q3 topic exchange with routing key {routing_key}", flush=True)
-                except Exception as e:
-                    print(f"[filter_by_hour] Worker {WORKER_INDEX} ERROR sending END message for client {client_id}: {e}", flush=True)
-                    import traceback
-                    traceback.print_exc()
+            del client_amount_counter[client_id]
+            del client_end_messages[client_id]
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} client {client_id} received all END messages from filter_by_year workers. Sending END messages...", flush=True)
+            # Print summary stats for this client
+            stats = client_stats[client_id]
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} SUMMARY for client {client_id}: messages_received={stats['messages_received']}, rows_received={stats['rows_received']}, rows_sent_to_amount={stats['rows_sent_to_amount']}, rows_sent_to_q3={stats['rows_sent_to_q3']}" )
+            try:
+                # Send END to filter_by_amount (to all workers) for this specific client
+                outgoing_sender = f"filter_by_hour_worker_{WORKER_INDEX}"
+                end_message, _ = build_message(client_id, type_of_message, 1, [], sender=outgoing_sender)
+                for i in range(NUMBER_OF_AMOUNT_WORKERS):
+                    routing_key = f"transaction.{i}"
+                    filter_by_amount_exchange.send(end_message, routing_key=routing_key)
+                    print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message for client {client_id} to filter_by_amount worker {i} via topic exchange", flush=True)
+                # Send END to categorizer_q3 topic exchange for all routing keys used for this client
+                for routing_key in client_q3_routing_keys[client_id]:
+                    end_message_q3, _ = build_message(client_id, type_of_message, 1, [], sender=outgoing_sender)
+                    categorizer_q3_topic_exchange.send(end_message_q3, routing_key=routing_key)
+                    print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message for client {client_id} to categorizer_q3 topic exchange with routing key {routing_key}", flush=True)
+            except Exception as e:
+                print(f"[filter_by_hour] Worker {WORKER_INDEX} ERROR sending END message for client {client_id}: {e}", flush=True)
+                import traceback
+                traceback.print_exc()
         
-        # CRITICAL: Save message_id to disk AFTER successful message sending to prevent message loss
-        if message_id and sender_id:
-            save_last_processed_message_id(sender_id, message_id)
-            print(f"[filter_by_hour] Worker {WORKER_INDEX} saved message_id to disk for sender {sender_id}: {message_id}", flush=True)
+        # # CRITICAL: Save message_id to disk AFTER successful message sending to prevent message loss
+        # if message_id and sender_id:
+        #     save_last_processed_message_id(sender_id, message_id)
+        #     print(f"[filter_by_hour] Worker {WORKER_INDEX} saved message_id to disk for sender {sender_id}: {message_id}", flush=True)
         
+        last_message_per_sender[sender_id] = message_id
+
+        save_state_to_disk(client_amount_counter, client_end_messages, last_message_per_sender)
+
         # Manual ACK: Only acknowledge after successful processing and persistence
         if delivery_tag and channel:
             channel.basic_ack(delivery_tag=delivery_tag)
@@ -313,17 +377,17 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
         # NACK on error to requeue the message
         if delivery_tag and channel:
             channel.basic_nack(delivery_tag=delivery_tag, requeue=True)
-            print(f"[filter_by_hour] Worker {WORKER_INDEX} NACK sent (requeue=True) due to error", flush=True)
+            print(f"\n\n\n\n[filter_by_hour] Worker {WORKER_INDEX} NACK sent (requeue=True) due to error", flush=True)
 
 
-def make_on_message_callback(should_stop):
-    def wrapper(body, delivery_tag, channel):
-        if should_stop.is_set():
-            print(f"[filter_by_hour] Worker {WORKER_INDEX} ignoring message due to shutdown signal", flush=True)
-            return
-        # For manual ACK, pass delivery_tag and channel
-        on_message_callback(body, should_stop, delivery_tag=delivery_tag, channel=channel)
-    return wrapper
+# def make_on_message_callback(should_stop):
+#     def wrapper(body, delivery_tag, channel):
+#         if should_stop.is_set():
+#             print(f"[filter_by_hour] Worker {WORKER_INDEX} ignoring message due to shutdown signal", flush=True)
+#             return
+#         # For manual ACK, pass delivery_tag and channel
+#         on_message_callback(body, should_stop, delivery_tag=delivery_tag, channel=channel)
+#     return wrapper
 
 def main():
     import threading
@@ -339,6 +403,9 @@ def main():
     rows_sent_to_amount = 0
     rows_sent_to_q3 = 0
     
+    global client_amount_counter, client_end_messages, last_message_per_sender
+    client_amount_counter, client_end_messages, last_message_per_sender = recover_state()
+
     print(f"[filter_by_hour] Worker {WORKER_INDEX} STARTING UP - Basic imports done", flush=True)
     print(f"[filter_by_hour] Worker {WORKER_INDEX} Environment: RECEIVER_EXCHANGE={RECEIVER_EXCHANGE}, START_HOUR={START_HOUR}, END_HOUR={END_HOUR}", flush=True)
     print(f"[filter_by_hour] Worker {WORKER_INDEX} Environment: FILTER_BY_AMOUNT_EXCHANGE={FILTER_BY_AMOUNT_EXCHANGE}", flush=True)
@@ -401,8 +468,8 @@ def main():
         should_stop = threading.Event()
         
         # Start consuming from topic exchange (blocking) - Manual ACK mode
-        topic_callback = make_on_message_callback(should_stop)
-        topic_middleware.start_consuming(topic_callback, auto_ack=False)
+        # topic_callback = make_on_message_callback(should_stop)
+        topic_middleware.start_consuming(on_message_callback, auto_ack=True)
         
         print(f"[filter_by_hour] Worker {WORKER_INDEX} topic consuming finished", flush=True)
         
@@ -410,8 +477,8 @@ def main():
             
     except MessageMiddlewareDisconnectedError:
         print(f"[filter_by_hour] Worker {WORKER_INDEX} disconnected from middleware.", file=sys.stderr)
-    except MessageMiddlewareMessageError:
-        print(f"[filter_by_hour] Worker {WORKER_INDEX} message error in middleware.", file=sys.stderr)
+    except MessageMiddlewareMessageError as e:
+        print(f"[filter_by_hour] Worker {WORKER_INDEX} message error in middleware: {e}", file=sys.stderr)
     except KeyboardInterrupt:
         print(f"[filter_by_hour] Worker {WORKER_INDEX} stopping...")
         should_stop.set()

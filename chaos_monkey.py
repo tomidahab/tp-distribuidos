@@ -29,11 +29,11 @@ class ChaosMonkey:
         
         # Containers we CAN kill (workers)
         self.target_patterns = {
-            #'filter_by_amount_worker_',
-            #'filter_by_hour_worker_',
-            #'filter_by_year_worker_',
+            # 'filter_by_amount_worker_'
+            # 'filter_by_hour_worker_',
+            'filter_by_year_worker_',
             #'categorizer_q2_worker_',
-            'categorizer_q3_worker_',
+            # 'categorizer_q3_worker_',
             #'categorizer_q4_worker_',
             #'birthday_dictionary_worker_'
         }
@@ -187,9 +187,9 @@ class ChaosMonkey:
 
 def main():
     parser = argparse.ArgumentParser(description='Chaos Monkey for tp-distribuidos')
-    parser.add_argument('--min-interval', type=int, default=5, 
+    parser.add_argument('--min-interval', type=int, default=4, 
                        help='Minimum seconds between kills (default: 10)')
-    parser.add_argument('--max-interval', type=int, default=7,
+    parser.add_argument('--max-interval', type=int, default=5,
                        help='Maximum seconds between kills (default: 60)')
     parser.add_argument('--kill-count', type=int, default=1,
                        help='Number of containers to kill per chaos event (default: 1)')
