@@ -24,10 +24,10 @@ class ChaosMonkey:
         
         # Containers to NEVER kill (protected)
         self.protected_patterns = {
-            'client_1', 'client_2', 'gateway', 'rabbitmq_server'
+            'client_1', 'client_2', 'gateway', 'rabbitmq_server', 'health_checker_0'
         }
         
-        # Containers we CAN kill (workers)
+        # Containers we CAN kill (workers + health checkers except health_checker_0)
         self.target_patterns = {
             'filter_by_amount_worker_',
             'filter_by_hour_worker_',
@@ -35,7 +35,8 @@ class ChaosMonkey:
             'categorizer_q3_worker_',
             'categorizer_q4_worker_',
             'birthday_dictionary_worker_'
-
+            # 'health_checker_1',
+            # 'health_checker_2'
         }
         
         # Track kills for statistics
@@ -47,6 +48,7 @@ class ChaosMonkey:
         print(f"   Containers per event: {kill_count}")
         print(f"   Dry run mode: {'ON' if dry_run else 'OFF'}")
         print(f"   Protected: {', '.join(self.protected_patterns)}")
+        print(f"   ⚠️  Special: health_checker_0 is ALWAYS protected, health_checker_1 and health_checker_2 can be killed")
         print()
 
     def signal_handler(self, signum, frame):
@@ -75,6 +77,10 @@ class ChaosMonkey:
         # Never kill protected containers
         if container_name in self.protected_patterns:
             return False
+        
+        # Specific check for health checkers - only allow killing health_checker_1 and health_checker_2
+        if 'health_checker' in container_name:
+            return container_name in ['health_checker_1', 'health_checker_2']
         
         # Only kill containers that match our target patterns
         return any(pattern in container_name for pattern in self.target_patterns)
@@ -131,6 +137,10 @@ class ChaosMonkey:
 
     def _extract_worker_type(self, container_name: str) -> str:
         """Extract worker type from container name for statistics"""
+        # Special handling for health checkers
+        if 'health_checker' in container_name:
+            return 'health_checker'
+            
         for pattern in self.target_patterns:
             if pattern in container_name:
                 return pattern.rstrip('_')
