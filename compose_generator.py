@@ -203,6 +203,7 @@ def generate_compose_file():
             wln(3, f"- WORKER_INDEX={i}")
             wln(3, f"- TOTAL_WORKERS={Q2_CATEGORIZERS}")
             wln(3, f"- NUMBER_OF_YEAR_WORKERS={YEAR_FILTERS}")
+            wln(3, f"- NUMBER_OF_CLIENTS={CLIENTS}")
             wln(2, "networks:")
             wln(3, f'- tpg_net')
             wln(2, "depends_on:")
