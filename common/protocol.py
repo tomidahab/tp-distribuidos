@@ -63,7 +63,12 @@ def build_message(client_id, csv_type: int, is_last: int, rows: List[str], messa
     
     # Generate message_id if not provided
     if message_id is None:
-        message_id = str(uuid.uuid4())
+        # Use deterministic UUID5 based on message content for consistent IDs
+        content_string = f"{client_id}_{csv_type}_{is_last}_{len(rows)}_{sender}"
+        if rows:
+            # Add first row content for uniqueness but keep deterministic
+            content_string += f"_{str(rows[0])}"
+        message_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, content_string))
     
     # Default sender if not provided
     if sender is None:

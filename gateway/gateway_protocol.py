@@ -18,8 +18,6 @@ CATEGORIZER_Q2_ITEMS_FANOUT_EXCHANGE = 'categorizer_q2_items_fanout_exchange'
 BIRTH_DIC_DATA_RESPONSES_QUEUE = os.environ.get('Q4_DATA_RESPONSES_QUEUE', 'gateway_client_data_queue')
 
 # Round-robin counters for distributing messages across workers - PER CLIENT
-transactions_worker_counter = {}  # client_id -> counter
-transaction_items_worker_counter = {}  # client_id -> counter
 
 
 def recv_lines_batch(skt: socket):
@@ -48,10 +46,8 @@ def handle_and_forward_chunk(client_id: str, csv_type: int, is_last: int, chunk:
                              categorizer_items_exchange, birth_dic_queue_exchange) -> int:
     """
     Construye el mensaje usando el protocolo y lo envía al exchange correspondiente por RabbitMQ.
-    Usa round-robin para distribuir entre múltiples workers de filter_by_year.
+    Usa hash-based routing para distribuir entre múltiples workers de filter_by_year de forma determinística.
     """
-    global transactions_worker_counter, transaction_items_worker_counter
-
     rows = chunk.decode("utf-8").splitlines()
     message, _ = build_message(client_id, csv_type, 0, rows)
     MAX_RETRIES = 3
@@ -61,15 +57,12 @@ def handle_and_forward_chunk(client_id: str, csv_type: int, is_last: int, chunk:
         if csv_type == CSV_TYPES_REVERSE["transaction_items"]:  # transaction_items
             for attempt in range(MAX_RETRIES):
                 try:
-                    # Round-robin distribution to workers - PER CLIENT
-                    if client_id not in transaction_items_worker_counter:
-                        transaction_items_worker_counter[client_id] = 0
-                    worker_index = transaction_items_worker_counter[client_id] % NUMBER_OF_YEAR_WORKERS
+                    # Hash-based distribution to workers for deterministic routing
+                    message_content = "\n".join(rows)
+                    worker_index = hash(message_content) % NUMBER_OF_YEAR_WORKERS
                     routing_key = f"year.{worker_index}"
                     # NOTE: that from here, we are already sending an is_last message to a worker (but also sending to all in send_end_messages_to_filter_by_year() so 1 of the workers will receive the is_last flasg 2 times)
                     transaction_items_exchange.send(message, routing_key=routing_key)
-                    transaction_items_worker_counter[client_id] += 1
-                    #print(f"[gateway_protocol] Sent transaction_items from {client_id} to worker {worker_index} with routing key {routing_key} (counter: {transaction_items_worker_counter[client_id]})", flush=True)
                     break
                 except Exception as e:
                     print(f"[gateway_protocol] Retry {attempt+1}/{MAX_RETRIES} for transaction_items exchange: {e}", file=sys.stderr)
@@ -81,14 +74,11 @@ def handle_and_forward_chunk(client_id: str, csv_type: int, is_last: int, chunk:
             # Enviar a filter_by_year_transactions_exchange
             for attempt in range(MAX_RETRIES):
                 try:
-                    # Round-robin distribution to workers - PER CLIENT
-                    if client_id not in transactions_worker_counter:
-                        transactions_worker_counter[client_id] = 0
-                    worker_index = transactions_worker_counter[client_id] % NUMBER_OF_YEAR_WORKERS
+                    # Hash-based distribution to workers for deterministic routing
+                    message_content = "\n".join(rows)
+                    worker_index = hash(message_content) % NUMBER_OF_YEAR_WORKERS
                     routing_key = f"year.{worker_index}"
                     transactions_exchange.send(message, routing_key=routing_key)
-                    transactions_worker_counter[client_id] += 1
-                    #print(f"[gateway_protocol] Sent transactions from {client_id} to worker {worker_index} with routing key {routing_key} (counter: {transactions_worker_counter[client_id]})", flush=True)
                     break
                 except Exception as e:
                     print(f"[gateway_protocol] Retry {attempt+1}/{MAX_RETRIES} for transactions exchange: {e}", file=sys.stderr)
