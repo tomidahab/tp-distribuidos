@@ -63,7 +63,7 @@ def save_last_processed_message_id(sender, message_id):
         persistence_file = get_persistence_file(sender)
         with open(persistence_file, 'w') as f:
             f.write(message_id)
-        print(f"[filter_by_year] Worker {WORKER_INDEX} saved message_id to disk for sender {sender}: {message_id}", flush=True)
+        # Removed duplicate print - logging is done in caller
     except Exception as e:
         print(f"[filter_by_year] Worker {WORKER_INDEX} ERROR saving persistence for sender {sender}: {e}", flush=True)
 
@@ -156,13 +156,15 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
 
         # Process message - no in-memory duplicate check by client (removed to avoid conflicts)
         if message_id:
-            print(f"[filter_by_year] Worker {WORKER_INDEX} processing message_id {message_id} for client {client_id} from sender {sender}", flush=True)
+            print(f"[filter_by_year] Worker {WORKER_INDEX} processing message_id {message_id} for client {client_id} from sender {sender} with {len(parsed_message['rows'])} rows", flush=True)
 
         new_rows = []
 
         # Update stats
         client_stats[client_id]['transactions_received'] += 1
         client_stats[client_id]['transactions_rows_received'] += len(parsed_message['rows'])
+        
+        print(f"[filter_by_year] Worker {WORKER_INDEX} BEFORE filtering: client {client_id} total_rows_received={client_stats[client_id]['transactions_rows_received']}", flush=True)
         
         for row in parsed_message['rows']:
             dic_fields_row = row_to_dict(row, type_of_message)
@@ -173,6 +175,8 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
                     new_rows.append(row)
             except Exception as e:
                 print(f"[transactions] Worker {WORKER_INDEX} Error parsing created_at: {created_at} ({e})", file=sys.stderr)
+
+        print(f"[filter_by_year] Worker {WORKER_INDEX} AFTER filtering: client {client_id} filtered {len(new_rows)} rows from {len(parsed_message['rows'])} input rows", flush=True)
 
         if new_rows or is_last: 
             if is_last:
@@ -193,6 +197,7 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
                 outgoing_sender = f"filter_by_year_worker_{WORKER_INDEX}"
                 new_message, _ = build_message(client_id, type_of_message, 0, new_rows, sender=outgoing_sender, message_id=message_id)
                 hour_filter_exchange.send(new_message, routing_key=routing_key)
+                print(f"[filter_by_year] Worker {WORKER_INDEX} SENT to filter_by_hour: client {client_id}, {len(new_rows)} rows, routing_key={routing_key}, total_sent={client_stats[client_id]['transactions_rows_sent_to_hour']}", flush=True)
 
             # Send to categorizer_q4 workers  
             batches = defaultdict(list)
@@ -233,24 +238,24 @@ def on_message_callback_transactions(message: bytes, hour_filter_exchange, categ
             stats = client_stats[client_id]
             print(f"[filter_by_year] Worker {WORKER_INDEX} SUMMARY for client {client_id}: transactions_received={stats['transactions_received']}, transactions_rows_received={stats['transactions_rows_received']}, transactions_rows_sent_to_hour={stats['transactions_rows_sent_to_hour']}, transactions_rows_sent_to_q4={stats['transactions_rows_sent_to_q4']}")
 
+        # CRITICAL: Save message_id to disk AFTER successful message sending to prevent message loss
+        if message_id and sender:
+            # Update in-memory tracking
+            on_message_callback_transactions._disk_last_message_id_by_sender[sender] = message_id
+            # Save to disk for persistence across restarts
+            save_last_processed_message_id(sender, message_id)
+            print(f"[filter_by_year] Worker {WORKER_INDEX} PERSISTENCE: saved message_id {message_id} for sender {sender}, total_processed_messages={client_stats[client_id]['transactions_received']}", flush=True)
+        
+        # Manual ACK: Only acknowledge after successful processing and persistence
+        if delivery_tag and channel:
+            channel.basic_ack(delivery_tag=delivery_tag)
+            print(f"[filter_by_year] Worker {WORKER_INDEX} ACK sent for TRANSACTIONS message from client {client_id}, sender {sender}", flush=True)
+
     except Exception as e:
         print(f"[transactions] Worker {WORKER_INDEX} Error decoding message: {e}", file=sys.stderr)
         if delivery_tag and channel:
             channel.basic_nack(delivery_tag=delivery_tag, requeue=True)
         return
-
-    # CRITICAL: Save message_id to disk AFTER successful message sending to prevent message loss
-    if message_id and sender:
-        # Update in-memory tracking
-        on_message_callback_transactions._disk_last_message_id_by_sender[sender] = message_id
-        # Save to disk for persistence across restarts
-        save_last_processed_message_id(sender, message_id)
-        print(f"[filter_by_year] Worker {WORKER_INDEX} saved message_id to disk for sender {sender}: {message_id}", flush=True)
-    
-    # Manual ACK: Only acknowledge after successful processing and persistence
-    if delivery_tag and channel:
-        channel.basic_ack(delivery_tag=delivery_tag)
-        print(f"[filter_by_year] Worker {WORKER_INDEX} ACK sent for TRANSACTIONS message from client {client_id}, sender {sender}", flush=True)
 
 def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_categorizer_fanout_exchange, delivery_tag=None, channel=None):
     global client_stats
@@ -262,7 +267,7 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
 
         # Extract ACK information if available
         message_id = parsed_message.get('message_id', '')
-        sender = parsed_message.get('sender', '')
+        sender = parsed_message.get('sender', 'unknown')
 
         # Initialize disk persistence tracking per sender if needed
         if not hasattr(on_message_callback_t_items, '_disk_last_message_id_by_sender'):
@@ -326,24 +331,24 @@ def on_message_callback_t_items(message: bytes, item_categorizer_exchange, item_
             stats = client_stats[client_id]
             print(f"[filter_by_year] Worker {WORKER_INDEX} T_ITEMS SUMMARY for client {client_id}: transaction_items_received={stats['transaction_items_received']}, transaction_items_rows_received={stats['transaction_items_rows_received']}, transaction_items_rows_sent_to_q2={stats['transaction_items_rows_sent_to_q2']}")
 
+        # CRITICAL: Save message_id to disk AFTER successful message sending to prevent message loss
+        if message_id and sender:
+            # Update in-memory tracking
+            on_message_callback_t_items._disk_last_message_id_by_sender[sender] = message_id
+            # Save to disk for persistence across restarts  
+            save_last_processed_message_id(sender, message_id)
+            print(f"[filter_by_year] Worker {WORKER_INDEX} T_ITEMS PERSISTENCE: saved message_id {message_id} for sender {sender}", flush=True)
+
+        # Manual ACK
+        if delivery_tag and channel:
+            channel.basic_ack(delivery_tag=delivery_tag)
+            print(f"[filter_by_year] Worker {WORKER_INDEX} ACK sent for T_ITEMS message from client {client_id}, sender {sender}", flush=True)
+
     except Exception as e:
         print(f"[t_items] Worker {WORKER_INDEX} Error decoding message: {e}", file=sys.stderr)
         if delivery_tag and channel:
             channel.basic_nack(delivery_tag=delivery_tag, requeue=True)
         return
-
-    # CRITICAL: Save message_id to disk AFTER successful message sending to prevent message loss
-    if message_id and sender:
-        # Update in-memory tracking
-        on_message_callback_t_items._disk_last_message_id_by_sender[sender] = message_id
-        # Save to disk for persistence across restarts  
-        save_last_processed_message_id(sender, message_id)
-        print(f"[filter_by_year] Worker {WORKER_INDEX} saved message_id to disk for sender {sender}: {message_id}", flush=True)
-
-    # Manual ACK
-    if delivery_tag and channel:
-        channel.basic_ack(delivery_tag=delivery_tag)
-        print(f"[filter_by_year] Worker {WORKER_INDEX} ACK sent for T_ITEMS message from client {client_id}, sender {sender}", flush=True)
 
 def main():
     global receiver_exchange_t
