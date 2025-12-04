@@ -176,7 +176,7 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
         
         # Process message - no in-memory duplicate check by client (removed to avoid conflicts)
         if message_id:
-            print(f"[filter_by_hour] Worker {WORKER_INDEX} processing message_id {message_id} for client {client_id} from sender {sender}", flush=True)
+            print(f"[filter_by_hour] Worker {WORKER_INDEX} processing message_id {message_id} for client {client_id} from sender {sender} (last processed from this sender: {on_message_callback._disk_last_message_id_by_sender.get(sender, 'None')})", flush=True)
         
         # Update client stats
         client_stats[client_id]['messages_received'] += 1
@@ -295,6 +295,10 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
         
         # CRITICAL: Save message_id to disk AFTER successful message sending to prevent message loss
         if message_id and sender:
+            # Check for runtime duplicates (same message_id in same execution)
+            if message_id == on_message_callback._disk_last_message_id_by_sender.get(sender):
+                print(f"[filter_by_hour] Worker {WORKER_INDEX} WARNING: RUNTIME DUPLICATE detected - processing same message_id twice in same execution for sender {sender}: {message_id}", flush=True)
+            
             on_message_callback._disk_last_message_id_by_sender[sender] = message_id
             save_last_processed_message_id(sender, message_id)
             print(f"[filter_by_hour] Worker {WORKER_INDEX} saved message_id to disk for sender {sender}: {message_id}", flush=True)
