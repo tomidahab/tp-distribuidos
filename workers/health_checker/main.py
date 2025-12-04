@@ -43,17 +43,14 @@ class HealthCheckerHandler(threading.Thread):
                 ## cprint(f"Connected to {self.host}:{self.port}")
 
                 self.send_health_checks()
-            except ConnectionError:
-                cprint(f"Disconnected from {self.host}:{self.port}, booting up the node...")
+            except Exception:  # Catch any connection error
+                cprint(f"Cannot connect to {self.host}:{self.port}, starting container...")
                 
                 containder_name = self.host
-                # Stop the process in case for some reason still active
-                result = subprocess.run(['docker', 'stop', containder_name], check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                cprint('Command executed. Result={}. Output={}. Error={}'.format(result.returncode, result.stdout, result.stderr))
-                # Start the process again               
+                # Start the container
                 result = subprocess.run(['docker', 'start', containder_name], check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                cprint('Command executed. Result={}. Output={}. Error={}'.format(result.returncode, result.stdout, result.stderr))
-                cprint(f"The node has been booted up")
+                cprint(f'Container start result: {result.returncode}')
+                time.sleep(10)  # Wait for container to start
 
 def main():
     signal.signal(signal.SIGTERM, _sigterm_handler)
