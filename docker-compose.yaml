@@ -298,6 +298,7 @@ services:
       - WORKER_INDEX=0
       - TOTAL_WORKERS=3
       - NUMBER_OF_YEAR_WORKERS=3
+      - NUMBER_OF_CLIENTS=2
     networks:
       - tpg_net
     depends_on:
@@ -322,6 +323,7 @@ services:
       - WORKER_INDEX=1
       - TOTAL_WORKERS=3
       - NUMBER_OF_YEAR_WORKERS=3
+      - NUMBER_OF_CLIENTS=2
     networks:
       - tpg_net
     depends_on:
@@ -346,6 +348,7 @@ services:
       - WORKER_INDEX=2
       - TOTAL_WORKERS=3
       - NUMBER_OF_YEAR_WORKERS=3
+      - NUMBER_OF_CLIENTS=2
     networks:
       - tpg_net
     depends_on:

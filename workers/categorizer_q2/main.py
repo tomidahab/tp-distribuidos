@@ -31,6 +31,7 @@ ITEMS_FANOUT_EXCHANGE = os.environ.get('ITEMS_FANOUT_EXCHANGE', 'categorizer_q2_
 WORKER_INDEX = int(os.environ.get('WORKER_INDEX', 0))
 TOTAL_WORKERS = int(os.environ.get('TOTAL_WORKERS', 1))
 NUMBER_OF_YEAR_WORKERS = int(os.environ.get('NUMBER_OF_YEAR_WORKERS', '3'))
+NUMBER_OF_CLIENTS = int(os.environ.get('NUMBER_OF_CLIENTS', '2'))
 
 topic_middleware = None
 items_exchange = None
@@ -159,7 +160,7 @@ def setup_queue_and_exchanges():
 def listen_for_items():
     items = []
     clients_ended = set()  # Track which clients have sent END messages
-    expected_clients = 2  # We expect 2 clients: client_1 and client_2
+    expected_clients = NUMBER_OF_CLIENTS  # Get from environment variable
     
     try:
         global items_exchange

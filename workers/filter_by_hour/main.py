@@ -4,7 +4,6 @@ import signal
 import time
 import sys
 import json
-import hashlib
 from collections import defaultdict
 
 from common.health_check_receiver import HealthCheckReceiver
@@ -106,22 +105,6 @@ def get_semester_key(year, month):
     """Generate semester routing key based on year and month"""
     semester = 1 if 1 <= month <= 6 else 2
     return f"semester.{year}-{semester}"
-
-def get_message_hash(row, csv_type):
-    """Generate consistent hash for a row to determine worker routing"""
-    try:
-        dic_fields_row = row_to_dict(row, csv_type)
-        # Use transaction_id for transactions, or a combination of fields for other types
-        if csv_type == CSV_TYPES_REVERSE['transactions']:
-            hash_key = dic_fields_row.get('transaction_id', '')
-        else:
-            # For other types, use a combination of relevant fields
-            hash_key = str(dic_fields_row)
-        
-        return int(hashlib.md5(hash_key.encode()).hexdigest(), 16)
-    except Exception as e:
-        # Fallback to string hash if row parsing fails
-        return hash(str(row))
 
 def filter_message_by_hour(parsed_message, start_hour: int, end_hour: int) -> list:
     try:
@@ -239,25 +222,17 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
                 if filtered_rows:
                     client_stats[client_id]['rows_sent_to_amount'] += len(filtered_rows)
                     
-                    # Group rows by worker to send in batches using hash-based distribution
-                    rows_by_worker = defaultdict(list)
-                    for row in filtered_rows:
-                        # Use hash-based routing for consistent distribution
-                        row_hash = get_message_hash(row, type_of_message)
-                        worker_index = row_hash % NUMBER_OF_AMOUNT_WORKERS
-                        routing_key = f"transaction.{worker_index}"
-                        rows_by_worker[routing_key].append(row)
+                    # Use deterministic routing based on message content hash
+                    # This ensures consistent routing across restarts while maintaining good distribution
+                    message_content = f"{client_id}_{type_of_message}_{len(filtered_rows)}_{message_id}"
+                    worker_index = hash(message_content) % NUMBER_OF_AMOUNT_WORKERS
+                    routing_key = f"transaction.{worker_index}"
                     
-                    # Send batched messages to each worker
-                    for routing_key, worker_rows in rows_by_worker.items():
-                        if worker_rows:
-                            outgoing_sender = f"filter_by_hour_worker_{WORKER_INDEX}"
-                            # CRITICAL: Pass message_id for persistence in downstream workers
-                            new_message, _ = build_message(client_id, type_of_message, 0, worker_rows, message_id=message_id, sender=outgoing_sender)
-                            filter_by_amount_exchange.send(new_message, routing_key=routing_key)
-                            rows_sent_to_amount += len(worker_rows)
-                            #print(f"[filter_by_hour] Worker {WORKER_INDEX} client {client_id}: Sent {len(worker_rows)} rows to filter_by_amount {routing_key} (total sent to amount: {client_stats[client_id]['rows_sent_to_amount']}, counter at: {client_stats[client_id]['amount_worker_counter']})")
-                            # print(f"[filter_by_hour] Worker {WORKER_INDEX} sent {len(worker_rows)} rows to {routing_key} (total sent to amount: {rows_sent_to_amount})", flush=True)
+                    outgoing_sender = f"filter_by_hour_worker_{WORKER_INDEX}"
+                    # CRITICAL: Pass message_id for persistence in downstream workers
+                    new_message, _ = build_message(client_id, type_of_message, 0, filtered_rows, message_id=message_id, sender=outgoing_sender)
+                    filter_by_amount_exchange.send(new_message, routing_key=routing_key)
+                    rows_sent_to_amount += len(filtered_rows)
                 
                 # For Q3 - group by semester and send to topic exchange
                 if filtered_rows:  # Only process if there are rows
