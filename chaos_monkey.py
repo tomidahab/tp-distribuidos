@@ -31,6 +31,7 @@ class ChaosMonkey:
         self.target_patterns = {
             'filter_by_amount_worker_',
             'filter_by_hour_worker_',
+            'filter_by_year_worker_',
             'categorizer_q2_worker_',
             'categorizer_q3_worker_',
             'categorizer_q4_worker_',
