@@ -176,7 +176,7 @@ def listen_for_transactions():
 
             # Check if the message has already been processed
             if last_message_per_sender[sender_id] == message_id:
-                print(f"[categorizer_q3] Worker {WORKER_INDEX} ignoring repeated message with ID: {message_id}")
+                # print(f"[categorizer_q3] Worker {WORKER_INDEX} ignoring repeated message with ID: {message_id}")
                 if channel and delivery_tag:
                     channel.basic_ack(delivery_tag=delivery_tag)  # Acknowledge the message
                 return
@@ -188,11 +188,15 @@ def listen_for_transactions():
             if is_last:
                 client_end_messages[client_id] += 1
                 print(f"[categorizer_q3] Worker {WORKER_INDEX} received END message {client_end_messages[client_id]}/{NUMBER_OF_HOUR_WORKERS} for client {client_id}", flush=True)
+                
+                # Save state after receiving END message to preserve END message count
+                save_state_to_disk(client_semester_store_stats, client_end_messages, last_message_per_sender)
+                
                 if client_end_messages[client_id] >= NUMBER_OF_HOUR_WORKERS:
                     if client_id not in completed_clients:
                         completed_clients.add(client_id)
                         send_client_results(client_id, client_semester_store_stats[client_id])
-                        print(f"[categorizer_q3] Client {client_id} processing completed")
+                        print(f"[categorizer_q3] Client {client_id} processing completed, sending results")
 
             # Skip if client already completed
             if client_id in completed_clients:

@@ -56,6 +56,8 @@ def save_last_processed_message_id(sender, message_id):
         persistence_file = get_persistence_file(sender)
         with open(persistence_file, 'w') as f:
             f.write(message_id)
+            f.flush()
+            os.fsync(f.fileno())
         print(f"[filter_by_hour] Worker {WORKER_INDEX} saved message_id to disk for sender {sender}: {message_id}", flush=True)
     except Exception as e:
         print(f"[filter_by_hour] Worker {WORKER_INDEX} ERROR saving persistence for sender {sender}: {e}", flush=True)
@@ -155,7 +157,7 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
         
         # Check if this is a duplicate message from this sender (message we processed before restart)
         if message_id and message_id == on_message_callback._disk_last_message_id_by_sender.get(sender):
-            print(f"[filter_by_hour] Worker {WORKER_INDEX} DUPLICATE message detected from disk persistence for sender {sender}, message_id {message_id} - skipping (container restart recovery)", flush=True)
+            # print(f"[filter_by_hour] Worker {WORKER_INDEX} DUPLICATE message detected from disk persistence for sender {sender}, message_id {message_id} - skipping (container restart recovery)", flush=True)
             # ACK the duplicate message to avoid reprocessing
             if delivery_tag and channel:
                 channel.basic_ack(delivery_tag=delivery_tag)
@@ -176,7 +178,8 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
         
         # Process message - no in-memory duplicate check by client (removed to avoid conflicts)
         if message_id:
-            print(f"[filter_by_hour] Worker {WORKER_INDEX} processing message_id {message_id} for client {client_id} from sender {sender} (last processed from this sender: {on_message_callback._disk_last_message_id_by_sender.get(sender, 'None')})", flush=True)
+            # print(f"[filter_by_hour] Worker {WORKER_INDEX} processing message_id {message_id} for client {client_id} from sender {sender} (last processed from this sender: {on_message_callback._disk_last_message_id_by_sender.get(sender, 'None')})", flush=True)
+            pass
         
         # Update client stats
         client_stats[client_id]['messages_received'] += 1
@@ -191,13 +194,13 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
         
         # Skip if client already completed - check AFTER processing END message
         if client_id in completed_clients:
-            print(f"[filter_by_hour] Worker {WORKER_INDEX} SKIPPING message from completed client {client_id} with {len(parsed_message['rows'])} rows, is_last={is_last}")
+            # print(f"[filter_by_hour] Worker {WORKER_INDEX} SKIPPING message from completed client {client_id} with {len(parsed_message['rows'])} rows, is_last={is_last}")
             
             # CRITICAL: Save message_id even when skipping to prevent reprocessing after restart
             if message_id and sender:
                 on_message_callback._disk_last_message_id_by_sender[sender] = message_id
                 save_last_processed_message_id(sender, message_id)
-                print(f"[filter_by_hour] Worker {WORKER_INDEX} saved skipped message_id for sender {sender}: {message_id}", flush=True)
+                # print(f"[filter_by_hour] Worker {WORKER_INDEX} saved skipped message_id for sender {sender}: {message_id}", flush=True)
             
             # ACK the message even if skipping to avoid requeue
             if delivery_tag and channel:
@@ -282,8 +285,9 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
                         routing_key = f"transaction.{i}"
                         filter_by_amount_exchange.send(end_message, routing_key=routing_key)
                         print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message for client {client_id} to filter_by_amount worker {i} via topic exchange", flush=True)
-                    # Send END to categorizer_q3 topic exchange for all routing keys used for this client
-                    for routing_key in client_q3_routing_keys[client_id]:
+                    # Send END to categorizer_q3 topic exchange - MUST send to ALL possible semester routing keys
+                    # to ensure all categorizer_q3 workers receive END messages even if no data was sent to them
+                    for routing_key in SEMESTER_KEYS_FOR_FANOUT:  # Send to ALL semester keys, not just used ones
                         # CRITICAL: Pass message_id for persistence
                         end_message_q3, _ = build_message(client_id, type_of_message, 1, [], message_id=message_id, sender=outgoing_sender)
                         categorizer_q3_topic_exchange.send(end_message_q3, routing_key=routing_key)
@@ -301,12 +305,12 @@ def on_message_callback(message: bytes, should_stop, delivery_tag=None, channel=
             
             on_message_callback._disk_last_message_id_by_sender[sender] = message_id
             save_last_processed_message_id(sender, message_id)
-            print(f"[filter_by_hour] Worker {WORKER_INDEX} saved message_id to disk for sender {sender}: {message_id}", flush=True)
+            # print(f"[filter_by_hour] Worker {WORKER_INDEX} saved message_id to disk for sender {sender}: {message_id}", flush=True)
         
         # Manual ACK: Only acknowledge after successful processing and persistence
         if delivery_tag and channel:
             channel.basic_ack(delivery_tag=delivery_tag)
-            print(f"[filter_by_hour] Worker {WORKER_INDEX} ACK sent for message from client {client_id}, sender {sender}", flush=True)
+            # print(f"[filter_by_hour] Worker {WORKER_INDEX} ACK sent for message from client {client_id}, sender {sender}", flush=True)
             
     except Exception as e:
         print(f"[filter_by_hour] Worker {WORKER_INDEX} ERROR processing message: {e}", flush=True)

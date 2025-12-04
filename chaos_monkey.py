@@ -34,9 +34,9 @@ class ChaosMonkey:
             'categorizer_q2_worker_',
             'categorizer_q3_worker_',
             'categorizer_q4_worker_',
-            'birthday_dictionary_worker_',
-            'health_checker_1',
-            'health_checker_2'
+            'birthday_dictionary_worker_'
+            # 'health_checker_1',
+            # 'health_checker_2'
         }
         
         # Track kills for statistics
