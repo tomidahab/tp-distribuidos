@@ -372,7 +372,7 @@ def on_message_callback(message: bytes, delivery_tag=None, channel=None):
                     filter_by_amount_exchange.send(end_message, routing_key=routing_key)
                     print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message for client {client_id} to filter_by_amount worker {i} via topic exchange", flush=True)
                 # Send END to categorizer_q3 topic exchange for all routing keys used for this client
-                for routing_key in client_q3_routing_keys[client_id]:
+                for routing_key in SEMESTER_KEYS_FOR_FANOUT:
                     end_message_q3, _ = build_message(client_id, type_of_message, 1, [], sender=outgoing_sender)
                     categorizer_q3_topic_exchange.send(end_message_q3, routing_key=routing_key)
                     print(f"[filter_by_hour] Worker {WORKER_INDEX} sent END message for client {client_id} to categorizer_q3 topic exchange with routing key {routing_key}", flush=True)
